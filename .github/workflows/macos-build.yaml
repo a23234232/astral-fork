@@ -51,6 +51,9 @@ jobs:
   build:
     # macos-14 及以上为 Apple Silicon 且预装 Xcode；指定它以保证架构可预期。
     runs-on: macos-14
+    # 实测冷构建约 22 分钟、热构建约 5 分钟。给 45 分钟余量，同时避免 runner
+    # 卡死时白耗默认的 6 小时额度。
+    timeout-minutes: 45
 
     permissions:
       contents: write
@@ -202,8 +205,13 @@ jobs:
 
       - name: 🔁 从 Release 快照恢复编译产物（仅缓存未命中时）
         # actions/cache 会被 GitHub 在“7 天未访问”后回收；Release 资产不会。
-        # 只在缓存完全未命中时才下载，避免正常构建白白多传 ~800MB。
+        # 只在缓存完全未命中时才下载，避免正常构建白白多传 ~900MB。
         if: steps.rust-target-cache.outputs.cache-hit != 'true'
+        env:
+          # 必须显式给 gh 认证信息：否则 gh release view 直接失败，下面的
+          # `|| exit 0` 会把失败吞掉，静默退化成冷构建（实测就是这样）。
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if ! gh release view "$CACHE_SNAPSHOT_TAG" >/dev/null 2>&1; then
@@ -284,6 +292,7 @@ jobs:
         if: ${{ github.event_name == 'schedule' || github.event.inputs.snapshot_cache == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           TARGET="${CARGOKIT_CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"

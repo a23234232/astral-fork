@@ -266,6 +266,24 @@ if "timeout-minutes" not in raw:
         "no timeout-minutes on the build job; a hung runner burns the 6h default"
     )
 
+# Any step shelling out to `gh release ...` needs GH_TOKEN, otherwise gh fails
+# and an `|| exit 0` guard turns that into a silent fallback. This exact bug
+# shipped once: the restore step had no GH_TOKEN, so it always reported "no
+# snapshot" and every build ran cold (measured 1382s vs 179s).
+for i, step in enumerate(steps, 1):
+    body = step.get("run")
+    if not isinstance(body, str):
+        continue
+    if re.search(r"\bgh release\b", body):
+        env = step.get("env") or {}
+        if "GH_TOKEN" not in env:
+            fail(
+                f"step '{step.get('name', i)}' calls `gh release` without GH_TOKEN; "
+                "it will fail and any fallback guard will hide it"
+            )
+        else:
+            print(f"  ok: gh release step authenticated ({step.get('name', i)[:24]})")
+
 # The redirected target dir must stay gitignored or a multi-GB artifact tree
 # could be committed.
 if not (
