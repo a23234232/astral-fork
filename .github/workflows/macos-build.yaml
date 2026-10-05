@@ -24,6 +24,11 @@ on:
         options:
           - arm64
           - x86_64
+      release_tag:
+        description: '发布为 Release 的标签（如 v2.9.60）。留空则只上传 artifact。'
+        required: false
+        default: ''
+        type: string
   push:
     tags:
       - 'v*'
@@ -42,6 +47,8 @@ jobs:
       FLUTTER_CHANNEL: ${{ github.event.inputs.flutter_version || 'beta' }}
       RUST_VERSION: 1.89.0
       BUILD_ARCH: ${{ github.event.inputs.build_arch || 'arm64' }}
+      # 手动触发时用输入值；被打 tag 触发时用该 tag。
+      RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
 
     steps:
       - name: 🛠️ 检出代码仓库
@@ -296,3 +303,37 @@ jobs:
           path: macos_build.log
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: 🚀 发布 Release
+        # 只有在 workflow_dispatch 传了 release_tag，或由 v* tag 触发时才发布。
+        # 注意：tag 触发时 RELEASE_TAG 等于 github.ref_name，形如 v2.9.60；
+        # 手动触发且留空时不发布，只保留 artifact。
+        if: ${{ github.event_name == 'push' || github.event.inputs.release_tag != '' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Astral ${{ env.RELEASE_TAG }} (macOS)
+          draft: false
+          prerelease: false
+          body: |
+            Astral ${{ env.APP_VERSION }} — macOS 版本
+
+            **架构**：universal（arm64 + x86_64），Intel 与 Apple Silicon 均可原生运行
+            **最低系统**：macOS 12.0 (Monterey)
+
+            ## 安装
+            1. 下载下方 `astral-macos-${{ env.BUILD_ARCH }}.dmg`
+            2. 打开后把 `astral.app` 拖入 Applications
+            3. **首次打开**：按住 Control 点击图标 → 选择「打开」→ 再点一次「打开」
+
+            > 本产物未使用 Apple 付费开发者证书签名（ad-hoc），因此 macOS 会拦截首次启动，
+            > 提示「无法验证开发者」或「应用已损坏」。这不是文件损坏。
+            > 也可执行：`xattr -dr com.apple.quarantine /Applications/astral.app`
+            > DMG 内附有《安装说明.txt》。
+
+            ## 构建信息
+            由 GitHub Actions 在 `macos-14` runner 上构建，流程见 `.github/workflows/macos-build.yaml`。
+          files: |
+            release/astral-macos-${{ env.BUILD_ARCH }}.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

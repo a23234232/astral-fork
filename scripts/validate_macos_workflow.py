@@ -188,12 +188,34 @@ required = {
     "flutter pub get": "Dart dependency resolution",
     "codesign --force --deep --sign -": "ad-hoc signing fallback",
     "codesign --verify --deep --strict": "signature verification",
+    "set -o pipefail": "pipefail so a failed build is not masked by tee",
 }
 for needle, what in required.items():
     if needle not in raw:
         fail(f"workflow is missing {what} (`{needle}`)")
     else:
         print(f"  ok: {what}")
+
+# Third-party actions must be ones we can vouch for; an unexpected `uses:` is a
+# supply-chain change worth failing on rather than silently trusting.
+known_actions = {
+    "actions/checkout@v4",
+    "actions/upload-artifact@v4",
+    "softprops/action-gh-release@v1",
+}
+for ref in sorted(set(re.findall(r"uses: (\S+)", raw))):
+    if ref not in known_actions:
+        fail(f"unvetted action reference: {ref}")
+print(f"  ok: {len(known_actions)} vetted actions, no unvetted `uses:`")
+
+# Release publishing is optional and must be gated, otherwise every manual build
+# would try to publish a release.
+if "release_tag" not in raw:
+    fail("workflow has no `release_tag` input for optional release publishing")
+elif not re.search(r"if:\s*\$\{\{\s*github\.event_name == 'push'", raw):
+    fail("release step is not gated on a tag push / explicit release_tag")
+else:
+    print("  ok: release publishing is opt-in and gated")
 
 # The DMG must ship the Gatekeeper workaround, otherwise users hitting
 # "app is damaged" have no path forward on an unsigned build.
