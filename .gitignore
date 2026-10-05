@@ -56,3 +56,7 @@ result
 
 # Npcap SDK (downloaded in CI or placed locally for Windows link; do not commit)
 third_party/npcap-sdk/
+
+# 本地排查 CI 失败时下载的构建日志，不属于源码
+build_log*.txt
+macos_build.log
