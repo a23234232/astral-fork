@@ -198,15 +198,26 @@ for needle, what in required.items():
 
 # Third-party actions must be ones we can vouch for; an unexpected `uses:` is a
 # supply-chain change worth failing on rather than silently trusting.
+#
+# These must also stay on Node 24-capable majors: GitHub force-runs Node 20
+# actions on Node 24 and emits a deprecation warning. checkout/upload-artifact
+# v4 and action-gh-release v1 are Node 20, hence v6/v6/v2 here.
 known_actions = {
+    "actions/checkout@v6",
+    "actions/upload-artifact@v6",
+    "softprops/action-gh-release@v2",
+}
+node20_actions = {
     "actions/checkout@v4",
     "actions/upload-artifact@v4",
     "softprops/action-gh-release@v1",
 }
 for ref in sorted(set(re.findall(r"uses: (\S+)", raw))):
-    if ref not in known_actions:
+    if ref in node20_actions:
+        fail(f"action {ref} targets deprecated Node 20; bump to a Node 24 major")
+    elif ref not in known_actions:
         fail(f"unvetted action reference: {ref}")
-print(f"  ok: {len(known_actions)} vetted actions, no unvetted `uses:`")
+print(f"  ok: {len(known_actions)} vetted actions, all on Node 24 majors")
 
 # Release publishing is optional and must be gated, otherwise every manual build
 # would try to publish a release.

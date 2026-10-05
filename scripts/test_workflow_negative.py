@@ -29,7 +29,7 @@ MUTATIONS = {
     ),
     "step with both uses and run": lambda s: s.replace(
         "      - name: 🐦 安装 Flutter\n        run: |",
-        "      - name: 🐦 安装 Flutter\n        uses: actions/checkout@v4\n        run: |",
+        "      - name: 🐦 安装 Flutter\n        uses: actions/checkout@v6\n        run: |",
         1,
     ),
     "with block with no children": lambda s: s.replace(
@@ -46,7 +46,10 @@ MUTATIONS = {
         1,
     ),
     "malformed action ref": lambda s: s.replace(
-        "uses: actions/checkout@v4", "uses: actions/checkout", 1
+        "uses: actions/checkout@v6", "uses: actions/checkout", 1
+    ),
+    "regress to Node 20 action": lambda s: s.replace(
+        "uses: actions/checkout@v6", "uses: actions/checkout@v4", 1
     ),
 }
 

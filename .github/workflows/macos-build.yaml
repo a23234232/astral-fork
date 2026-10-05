@@ -52,7 +52,7 @@ jobs:
 
     steps:
       - name: 🛠️ 检出代码仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
           lfs: true
@@ -287,7 +287,7 @@ jobs:
           ls -lh "$DMG"
 
       - name: 📤 上传 DMG 产物
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: astral-macos-${{ env.BUILD_ARCH }}
           path: release/astral-macos-${{ env.BUILD_ARCH }}.dmg
@@ -297,7 +297,7 @@ jobs:
       - name: 📤 上传构建日志
         # 失败时也要能看到完整日志，方便定位 Rust / Xcode 报错。
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-build-log
           path: macos_build.log
@@ -309,7 +309,7 @@ jobs:
         # 注意：tag 触发时 RELEASE_TAG 等于 github.ref_name，形如 v2.9.60；
         # 手动触发且留空时不发布，只保留 artifact。
         if: ${{ github.event_name == 'push' || github.event.inputs.release_tag != '' }}
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Astral ${{ env.RELEASE_TAG }} (macOS)
