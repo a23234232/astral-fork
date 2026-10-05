@@ -29,9 +29,23 @@ on:
         required: false
         default: ''
         type: string
+      snapshot_cache:
+        description: '把 Rust 编译产物快照上传为 Release 资产（持久化兜底）。'
+        required: false
+        default: false
+        type: boolean
+      cache_bust:
+        description: '缓存击穿标记：填任意值可强制冷构建（缓存损坏时的手动逃生口）。'
+        required: false
+        default: ''
+        type: string
   push:
     tags:
       - 'v*'
+  # 每 6 天自动构建一次，刷新 actions/cache 的访问时间，避免触发 GitHub 的
+  # “7 天未访问即回收”策略。公开仓库的 Actions 分钟数免费，成本可忽略。
+  schedule:
+    - cron: '0 3 */6 * *'
 
 jobs:
   build:
@@ -51,6 +65,8 @@ jobs:
       # actions/cache 命中），而不是 Xcode 每次构建都变化的 TARGET_TEMP_DIR。
       # 仓库内 rust/.gitignore 已含 /target，不会误提交。
       CARGOKIT_CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
+      # 编译产物快照所在的 Release 标签（资产永久保留，不受 7 天回收影响）。
+      CACHE_SNAPSHOT_TAG: cache-snapshot
       # 手动触发时用输入值；被打 tag 触发时用该 tag。
       RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
 
@@ -174,13 +190,50 @@ jobs:
         # actions/cache 也无从命中。因此我们在 workflow 里设
         # CARGOKIT_CARGO_TARGET_DIR 指向仓库内的固定路径，并对该路径做缓存。
         # 源码或 Cargo.lock 变化会让 key 失配，退化为 restore-keys 的部分命中
-        # （Cargo 仍能复用未受影响的 crate），cargo-bust-* 供手动强制冷构建。
+        # （Cargo 仍能复用未受影响的 crate）。
+        id: rust-target-cache
         uses: actions/cache@v4
         with:
           path: ${{ github.workspace }}/rust/target
-          key: cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-${{ hashFiles('rust/Cargo.lock', 'rust/src/**', 'rust/build.rs', 'rust_builder/macos/rust_lib_astral.podspec') }}
+          key: cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-${{ hashFiles('rust/Cargo.lock', 'rust/src/**', 'rust/build.rs', 'rust_builder/macos/rust_lib_astral.podspec') }}-${{ github.event.inputs.cache_bust }}
           restore-keys: |
             cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-
+
+      - name: 🔁 从 Release 快照恢复编译产物（仅缓存未命中时）
+        # actions/cache 会被 GitHub 在“7 天未访问”后回收；Release 资产不会。
+        # 只在缓存完全未命中时才下载，避免正常构建白白多传 ~800MB。
+        if: steps.rust-target-cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          if ! gh release view "$CACHE_SNAPSHOT_TAG" >/dev/null 2>&1; then
+            echo "无 $CACHE_SNAPSHOT_TAG 快照，走冷构建"
+            exit 0
+          fi
+          ASSETS=$(gh release view "$CACHE_SNAPSHOT_TAG" --json assets \
+            --jq '.assets[].name | select(startswith("rust-target.tar.gz"))' || true)
+          if [[ -z "$ASSETS" ]]; then
+            echo "快照中无 rust-target.tar.gz* 资产，走冷构建"
+            exit 0
+          fi
+          echo "下载快照分卷："; echo "$ASSETS"
+          rm -rf /tmp/snap && mkdir -p /tmp/snap
+          gh release download "$CACHE_SNAPSHOT_TAG" -p 'rust-target.tar.gz*' -D /tmp/snap --clobber
+          ls -lh /tmp/snap
+          # 分卷上传时是 rust-target.tar.gz.partNN；未分卷时是单个
+          # rust-target.tar.gz。注意 cat 一个不存在的 glob 会返回非零，
+          # 所以不能用 `cat ... || cp ...` 这种写法，必须先判断。
+          if compgen -G "/tmp/snap/rust-target.tar.gz.part*" > /dev/null; then
+            cat /tmp/snap/rust-target.tar.gz.part* > /tmp/rust-target.tar.gz
+          else
+            cp /tmp/snap/rust-target.tar.gz /tmp/rust-target.tar.gz
+          fi
+          # 解压到目标目录的上级，因为归档里第一层是 target/。
+          TARGET="${CARGOKIT_CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"
+          mkdir -p "$(dirname "$TARGET")"
+          rm -rf "$TARGET"
+          tar -xzf /tmp/rust-target.tar.gz -C "$(dirname "$TARGET")"
+          du -sh "$TARGET"
+          echo "快照恢复完成"
 
       - name: 🍫 安装 CocoaPods 依赖
         run: |
@@ -220,6 +273,46 @@ jobs:
             echo "::warning::未找到 $TARGET —— cargokit 可能没有使用指定目录，缓存将不会生效"
           fi
           du -sh "$HOME/.cargo/registry" "$HOME/.cargo/git" 2>/dev/null || true
+
+      - name: 💾 上传编译产物快照为 Release 资产
+        # 持久化兜底：actions/cache 会被 7 天未访问回收，Release 资产不会。
+        # 只在定时构建或手动勾选 snapshot_cache 时执行，避免每次构建都多花时间。
+        #
+        # GitHub 单个 Release 资产上限 2GiB，而 target 未压缩约 2.9GB，因此先
+        # tar.gz 再按 1.5GiB 分卷；恢复时按 part 顺序拼接。
+        if: ${{ github.event_name == 'schedule' || github.event.inputs.snapshot_cache == 'true' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET="${CARGOKIT_CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"
+          [[ -d "$TARGET" ]] || { echo "::warning::无 $TARGET，跳过快照"; exit 0; }
+
+          cd "$(dirname "$TARGET")"
+          tar -czf /tmp/rust-target.tar.gz "$(basename "$TARGET")"
+          ls -lh /tmp/rust-target.tar.gz
+
+          SPLIT_LIMIT=$((1536 * 1024 * 1024))   # 1.5 GiB，留足 2GiB 上限余量
+          SIZE=$(stat -f%z /tmp/rust-target.tar.gz)
+          rm -rf /tmp/snap && mkdir -p /tmp/snap
+          if (( SIZE > SPLIT_LIMIT )); then
+            echo "归档 ${SIZE} 字节超过分卷阈值，分卷上传"
+            split -b "$SPLIT_LIMIT" -d -a 2 /tmp/rust-target.tar.gz /tmp/snap/rust-target.tar.gz.part
+          else
+            cp /tmp/rust-target.tar.gz /tmp/snap/rust-target.tar.gz
+          fi
+          ls -lh /tmp/snap
+
+          # 首次运行时创建快照 Release；已存在则复用。
+          if ! gh release view "$CACHE_SNAPSHOT_TAG" >/dev/null 2>&1; then
+            gh release create "$CACHE_SNAPSHOT_TAG" \
+              --title "编译产物快照（自动生成，请勿删除）" \
+              --notes "本 Release 仅用于持久化 Rust 编译产物，供 macOS 构建在 actions/cache 被回收后快速恢复。由 .github/workflows/macos-build.yaml 自动维护。"
+          fi
+          gh release upload "$CACHE_SNAPSHOT_TAG" /tmp/snap/* --clobber
+          echo "快照已上传"
+          gh release view "$CACHE_SNAPSHOT_TAG" --json assets \
+            --jq '.assets[] | .name + "  " + (.size|tostring)'
 
       - name: 🔑 导入签名证书（可选，未配置则跳过）
         id: cert

@@ -244,6 +244,28 @@ else:
     print("  ok: actions/cache wired")
 if "rust/target" not in raw:
     fail("workflow does not cache rust/target")
+
+# Persistent fallback: actions/cache is evicted by GitHub after 7 days without
+# access; Release assets are not. The snapshot must only be downloaded when the
+# cache genuinely missed, otherwise every build pays ~800MB of transfer.
+if "snapshot_cache" not in raw:
+    fail("workflow has no snapshot_cache input for the durable Release fallback")
+else:
+    print("  ok: durable snapshot input present")
+if "cache-hit != 'true'" not in raw:
+    fail("snapshot restore is not gated on a cache miss; every build would "
+         "download it unconditionally")
+else:
+    print("  ok: snapshot restore gated on cache miss")
+if not re.search(r"^\s{2}schedule:", raw, re.M):
+    fail("no `schedule:` trigger; the cache would expire after 7 idle days")
+else:
+    print("  ok: scheduled warm-up keeps the cache alive")
+if "timeout-minutes" not in raw:
+    warnings.append(
+        "no timeout-minutes on the build job; a hung runner burns the 6h default"
+    )
+
 # The redirected target dir must stay gitignored or a multi-GB artifact tree
 # could be committed.
 if not (
