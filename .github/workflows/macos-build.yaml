@@ -196,8 +196,9 @@ jobs:
         with:
           path: ${{ github.workspace }}/rust/target
           key: cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-${{ hashFiles('rust/Cargo.lock', 'rust/src/**', 'rust/build.rs', 'rust_builder/macos/rust_lib_astral.podspec') }}-${{ github.event.inputs.cache_bust }}
-          restore-keys: |
-            cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-
+          # cache_bust 必须同时清掉 restore-keys，否则仍会命中级联前缀，
+          # 起不到“强制冷构建”的作用（实测：只改 key 时构建仍只用了 3 分钟）。
+          restore-keys: ${{ github.event.inputs.cache_bust == '' && format('cargo-target-{0}-{1}-{2}-', runner.os, env.BUILD_ARCH, env.RUST_VERSION) || '' }}
 
       - name: 🔁 从 Release 快照恢复编译产物（仅缓存未命中时）
         # actions/cache 会被 GitHub 在“7 天未访问”后回收；Release 资产不会。
@@ -304,10 +305,12 @@ jobs:
           ls -lh /tmp/snap
 
           # 首次运行时创建快照 Release；已存在则复用。
+          # 用 --prerelease 标记：这是缓存桶，不是软件版本，不应占据 Latest。
           if ! gh release view "$CACHE_SNAPSHOT_TAG" >/dev/null 2>&1; then
             gh release create "$CACHE_SNAPSHOT_TAG" \
               --title "编译产物快照（自动生成，请勿删除）" \
-              --notes "本 Release 仅用于持久化 Rust 编译产物，供 macOS 构建在 actions/cache 被回收后快速恢复。由 .github/workflows/macos-build.yaml 自动维护。"
+              --prerelease \
+              --notes "本 Release 不是软件版本，仅用于持久化 Rust 编译产物，供 macOS 构建在 actions/cache 被回收后快速恢复。由 .github/workflows/macos-build.yaml 自动维护，请勿删除。"
           fi
           gh release upload "$CACHE_SNAPSHOT_TAG" /tmp/snap/* --clobber
           echo "快照已上传"
