@@ -1,0 +1,60 @@
+Astral for macOS — 安装说明 / Installation
+==========================================
+
+这个应用没有使用 Apple 付费开发者证书签名，因此首次打开时 macOS 的
+Gatekeeper 会拦截，提示"无法验证开发者"或"应用已损坏"。这不是文件损坏，
+按下面任一方式即可正常使用。
+
+This app is not signed with a paid Apple Developer certificate, so macOS
+Gatekeeper will block it on first launch. The file is NOT corrupted. Follow
+either method below.
+
+
+方式一：右键打开（推荐，最省事）
+--------------------------------
+1. 把 astral.app 从本窗口拖到左边的 Applications 文件夹
+2. 在"应用程序"里找到 astral
+3. 按住 Control 键点击图标（或右键），选择"打开"
+4. 弹窗里再点一次"打开"
+
+只需做一次。之后就能正常双击启动。
+
+
+方式二：命令行移除隔离标记
+--------------------------
+把 astral.app 拖进 Applications 后，打开"终端"执行：
+
+    xattr -dr com.apple.quarantine /Applications/astral.app
+
+然后正常双击即可。若提示权限不足，在命令前加 sudo。
+
+
+方式三：系统设置里放行
+----------------------
+若已被拦截过一次：
+  系统设置 → 隐私与安全性 → 向下滚动到"安全性"
+  → 会看到关于 astral 的提示 → 点"仍要打开"
+
+
+常见问题
+--------
+Q: 提示"应用已损坏，无法打开"？
+A: 是 Gatekeeper 的措辞，不是文件真的坏了。用方式二最直接。
+
+Q: 双击没反应？
+A: 本应用需要管理员权限来创建虚拟网卡（TUN）。首次运行时系统会弹出
+   授权窗口，请输入密码。若没弹出，请用方式一重新打开一次。
+
+Q: 支持哪些 macOS 版本？
+A: macOS 12.0 (Monterey) 及以上。本应用是 universal 二进制，
+   Intel 和 Apple Silicon 都能原生运行。
+
+Q: 为什么会被拦截？
+A: Apple 要求分发到其他机器的应用必须用 Developer ID 证书签名并经过
+   公证（需 $99/年开发者账号）。本项目为开源非商业项目，未购买该账号。
+
+
+构建信息
+--------
+本产物由 GitHub Actions 的 macOS runner 构建，流程见仓库中的
+.github/workflows/macos-build.yaml

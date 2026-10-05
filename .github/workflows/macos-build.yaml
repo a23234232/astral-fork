@@ -1,0 +1,298 @@
+name: 🍏 构建 macOS 应用
+
+# macOS 应用只能在搭载 Xcode 的 macOS 主机上编译（Apple 工具链不开源、不可跨平台）。
+# 本工作流在 GitHub 托管的 macOS runner 上完成构建，runner 已预装 Xcode，无需自备 Mac。
+#
+# 签名策略：
+#   未配置 MACOS_CERT_P12 时走 ad-hoc 签名（不需要开发者账号，但过不了 Gatekeeper，
+#   用户首次打开需右键→打开，或 xattr -dr com.apple.quarantine）。
+#   配置了证书与公证凭据后自动切换为 Developer ID 签名 + 公证。
+
+on:
+  workflow_dispatch:
+    inputs:
+      flutter_version:
+        description: 'Flutter 版本（beta / stable / 具体版本号如 3.35.0）'
+        required: false
+        default: 'beta'
+        type: string
+      build_arch:
+        description: '目标架构（runner 为 Apple Silicon，默认 arm64）'
+        required: false
+        default: 'arm64'
+        type: choice
+        options:
+          - arm64
+          - x86_64
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    # macos-14 及以上为 Apple Silicon 且预装 Xcode；指定它以保证架构可预期。
+    runs-on: macos-14
+
+    permissions:
+      contents: write
+      packages: write
+
+    env:
+      FLUTTER_VERSION: ${{ github.event.inputs.flutter_version || 'beta' }}
+      FLUTTER_CHANNEL: ${{ github.event.inputs.flutter_version || 'beta' }}
+      RUST_VERSION: 1.89.0
+      BUILD_ARCH: ${{ github.event.inputs.build_arch || 'arm64' }}
+
+    steps:
+      - name: 🛠️ 检出代码仓库
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # runner 自带 Xcode，这里只做断言：确认工具链真的可用，失败就早退，
+      # 不要等到几十分钟的 Rust 编译之后才发现。
+      - name: 🍎 确认 Xcode 工具链
+        run: |
+          set -euo pipefail
+          xcode-select -p
+          xcodebuild -version
+          sudo xcodebuild -runFirstLaunch || true
+          echo "SDK:"
+          xcodebuild -showsdks | grep -i macos || true
+
+      - name: 📌 读取应用版本号
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=$(grep '^version:' pubspec.yaml | head -1 | awk '{print $2}' | tr -d '\r')
+            VERSION="${VERSION%%+*}"
+          fi
+          echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Resolved version: $VERSION"
+
+      - name: 🦀 设置 Rust 工具链 ${{ env.RUST_VERSION }}
+        run: |
+          set -euo pipefail
+          chmod +x "$GITHUB_WORKSPACE/scripts/install_rust.sh"
+          "$GITHUB_WORKSPACE/scripts/install_rust.sh"
+          # rustup 由脚本在子 shell 中安装，其 PATH 不会传回本步骤。
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustc --version
+          # cargokit 会在 Xcode 构建阶段按目标架构调用 cargo，必须预装交叉目标。
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup target list --installed
+
+      - name: 📦 安装系统依赖
+        run: |
+          set -euo pipefail
+          # 不要用 `brew update`：它会同步整个 formula 仓库，实测单个步骤就超过
+          # 10 分钟。runner 镜像已预装 cmake/ninja/cocoapods，先探测，只补缺的。
+          need=()
+          for tool in cmake ninja pod protoc; do
+            if command -v "$tool" >/dev/null 2>&1; then
+              echo "已存在: $tool -> $(command -v "$tool")"
+            else
+              echo "缺失:   $tool"
+              need+=("$tool")
+            fi
+          done
+
+          if ((${#need[@]})); then
+            # protoc 由 protobuf 提供，pod 由 cocoapods 提供，其余同名。
+            formula=()
+            for t in "${need[@]}"; do
+              case "$t" in
+                protoc) formula+=(protobuf) ;;
+                pod)    formula+=(cocoapods) ;;
+                *)      formula+=("$t") ;;
+              esac
+            done
+            # 同样跳过隐式更新；formula 索引随 runner 镜像分发，已足够新。
+            export HOMEBREW_NO_AUTO_UPDATE=1
+            brew install --quiet "${formula[@]}"
+          else
+            echo "所有构建依赖均已预装，跳过 brew install"
+          fi
+
+          echo "protoc: $(protoc --version)"
+          echo "cocoapods: $(pod --version)"
+          echo "cmake: $(cmake --version | head -1)"
+          echo "ninja: $(ninja --version)"
+
+      - name: 🐦 安装 Flutter
+        run: |
+          set -euo pipefail
+          chmod +x "$GITHUB_WORKSPACE/scripts/install_flutter.sh"
+          "$GITHUB_WORKSPACE/scripts/install_flutter.sh"
+          # 安装脚本是在子 shell 中执行的，它里面的 export PATH 不会传回本步骤。
+          # $GITHUB_PATH 也只对后续步骤生效，所以这里必须显式补一次。
+          export PATH="$HOME/flutter/bin:$HOME/.cargo/bin:$PATH"
+          which flutter
+          flutter --version
+          flutter config --enable-macos-desktop
+          flutter config --no-analytics || true
+
+      - name: 📚 获取 Flutter 依赖
+        run: |
+          set -euo pipefail
+          # $GITHUB_PATH 从下一步起才生效，这里再补一次，避免依赖步骤顺序。
+          export PATH="$HOME/flutter/bin:$HOME/.cargo/bin:$PATH"
+          flutter precache --macos
+          flutter pub get
+
+      - name: 🍫 安装 CocoaPods 依赖
+        run: |
+          set -euo pipefail
+          cd macos
+          # 仓库内提交的 Podfile.lock 早于当前 pubspec 依赖集（仍含已移除的
+          # sentry/file_picker 等），会与 pod install 解析结果冲突，这里直接重建。
+          rm -f Podfile.lock
+          pod install --repo-update
+          ls -la Pods/ | head -20
+
+      - name: 🛠️ 构建 macOS 应用
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/flutter/bin:$HOME/.cargo/bin:$PATH"
+          # cargokit 在 Xcode 阶段编译 Rust；失败时输出会很长，持久化日志便于排错。
+          # 必须开 pipefail：否则 flutter 失败会被 tee 的成功退出码掩盖，
+          # 构建明明挂了却继续往下走。
+          set -o pipefail
+          flutter build macos --release \
+            --build-name="${APP_VERSION}" \
+            2>&1 | tee "$GITHUB_WORKSPACE/macos_build.log"
+
+      - name: 🔑 导入签名证书（可选，未配置则跳过）
+        id: cert
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CERT_P12:-}" ]]; then
+            echo "::notice::未配置 MACOS_CERT_P12，将使用 ad-hoc 签名"
+            echo "SIGN_IDENTITY=-" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          KEYCHAIN="$RUNNER_TEMP/AstralSigning.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$CERT_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          # 让 codesign 在非交互环境下无需再次授权即可使用私钥。
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+
+          # 保留原有搜索列表，避免破坏 runner 自带 keychain 的查找。
+          EXISTING="$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$KEYCHAIN" $EXISTING
+          security find-identity -v -p codesigning "$KEYCHAIN"
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "SIGN_IDENTITY=Developer ID Application" >> "$GITHUB_ENV"
+
+      - name: 🖊️ 签名 .app
+        run: |
+          set -euo pipefail
+          APP="build/macos/Build/Products/Release/astral.app"
+          IDENTITY="${SIGN_IDENTITY:--}"
+
+          if [[ "$IDENTITY" == "-" ]]; then
+            # ad-hoc 签名：不需要证书，让 bundle 签名自洽，但**不能**通过
+            # Gatekeeper 公证检查，用户下载后仍需右键打开或移除 quarantine。
+            codesign --force --deep --sign - "$APP"
+            echo "已使用 ad-hoc 签名（无证书）"
+          else
+            IDENTITY_HASH="$(security find-identity -v -p codesigning | awk -v pat="$IDENTITY" '$0 ~ pat {print $2; exit}')"
+            test -n "$IDENTITY_HASH" || { echo "::error::keychain 中找不到 '$IDENTITY' 证书"; security find-identity -v -p codesigning; exit 1; }
+            codesign --force --deep --options runtime --timestamp \
+              --entitlements macos/Runner/Release.entitlements \
+              --sign "$IDENTITY_HASH" "$APP"
+            echo "已使用 Developer ID 签名"
+          fi
+
+          echo "=== 签名校验 ==="
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dv --verbose=4 "$APP" 2>&1 | grep -E 'Identifier|TeamIdentifier|Signature|Authority|flags' || true
+
+          echo "=== Gatekeeper 评估（ad-hoc 预期被拒，属正常）==="
+          spctl -a -vvv "$APP" 2>&1 || echo "（未通过 Gatekeeper，未签名产物属预期）"
+
+          if [[ "$IDENTITY" != "-" ]]; then
+            codesign -dv --verbose=4 "$APP" 2>&1 | grep -q 'Authority=Developer ID' \
+              || { echo "::error::签名未使用 Developer ID"; exit 1; }
+          fi
+
+      - name: 🔎 校验产物
+        run: |
+          set -euo pipefail
+          APP="build/macos/Build/Products/Release/astral.app"
+          test -d "$APP" || { echo "::error::未找到 $APP"; exit 1; }
+          echo "=== bundle 结构 ==="
+          ls -la "$APP/Contents"
+          echo "=== 主程序架构 ==="
+          lipo -info "$APP/Contents/MacOS/astral"
+          echo "=== 动态库依赖 ==="
+          otool -L "$APP/Contents/MacOS/astral" | head -20
+          echo "=== 最低系统版本 ==="
+          /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist" || true
+
+      - name: 💿 打包 DMG
+        run: |
+          set -euo pipefail
+          APP="build/macos/Build/Products/Release/astral.app"
+          mkdir -p release
+          # 用临时目录构造 DMG 内容，保证 .app 位于卷根目录。
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          cp -R "$APP" "$STAGE/"
+          ln -s /Applications "$STAGE/Applications"
+          # 未签名产物会被 Gatekeeper 拦截，把放行说明一起放进 DMG，
+          # 否则用户看到"应用已损坏"时无从下手。
+          cp macos/INSTALL.txt "$STAGE/安装说明.txt"
+
+          # UDZO 是压缩格式，事后从 DMG 字节里无法确认内容；这里显式打印
+          # staging 目录，让日志本身可审计（缺文件时 cp 在 set -e 下已早退）。
+          echo "=== DMG 将包含 ==="
+          ls -la "$STAGE"
+          test -d "$STAGE/astral.app" || { echo "::error::staging 中缺少 astral.app"; exit 1; }
+          test -f "$STAGE/安装说明.txt" || { echo "::error::staging 中缺少 安装说明.txt"; exit 1; }
+          test -L "$STAGE/Applications" || { echo "::error::staging 中缺少 Applications 软链"; exit 1; }
+
+          DMG="release/astral-macos-${BUILD_ARCH}.dmg"
+          rm -f "$DMG"
+          hdiutil create \
+            -volname "Astral" \
+            -srcfolder "$STAGE" \
+            -ov -format UDZO \
+            "$DMG"
+          echo "=== DMG 校验 ==="
+          hdiutil verify "$DMG"
+          ls -lh "$DMG"
+
+      - name: 📤 上传 DMG 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: astral-macos-${{ env.BUILD_ARCH }}
+          path: release/astral-macos-${{ env.BUILD_ARCH }}.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: 📤 上传构建日志
+        # 失败时也要能看到完整日志，方便定位 Rust / Xcode 报错。
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build-log
+          path: macos_build.log
+          if-no-files-found: ignore
+          retention-days: 7
