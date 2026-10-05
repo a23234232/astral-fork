@@ -18,6 +18,18 @@ class Environment {
   /// Temporary directory where Rust build artifacts are placed.
   static String get targetTempDir => _getEnv("CARGOKIT_TARGET_TEMP_DIR");
 
+  /// Optional stable directory for Cargo build artifacts.
+  ///
+  /// Xcode's TARGET_TEMP_DIR (the default) lives under DerivedData and gets a
+  /// fresh path per build, so Cargo's incremental cache is always cold and CI
+  /// cannot cache it. When CARGOKIT_CARGO_TARGET_DIR is set, cargo writes there
+  /// instead, which on CI is a fixed path inside the checkout that
+  /// actions/cache can restore. Unset means the original behaviour.
+  static String? get cargoTargetDirOverride =>
+      Platform.environment["CARGOKIT_CARGO_TARGET_DIR"]?.trim().isNotEmpty == true
+          ? Platform.environment["CARGOKIT_CARGO_TARGET_DIR"]!.trim()
+          : null;
+
   /// Final output directory where the build artifacts are placed.
   static String get outputDir => _getEnvPath('CARGOKIT_OUTPUT_DIR');
 

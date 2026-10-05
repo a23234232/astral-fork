@@ -139,6 +139,10 @@ class RustBuilder {
   Future<String> build() async {
     final extraArgs = _buildOptions?.flags ?? [];
     final manifestPath = path.join(environment.manifestDir, 'Cargo.toml');
+    // Defaults to Xcode's per-build temp dir; CARGOKIT_CARGO_TARGET_DIR makes it
+    // a stable path so Cargo's incremental cache survives between builds.
+    final cargoTargetDir =
+        Environment.cargoTargetDirOverride ?? environment.targetTempDir;
     runCommand(
       'rustup',
       [
@@ -155,12 +159,12 @@ class RustBuilder {
         '--target',
         target.rust,
         '--target-dir',
-        environment.targetTempDir,
+        cargoTargetDir,
       ],
       environment: await _buildEnvironment(),
     );
     return path.join(
-      environment.targetTempDir,
+      cargoTargetDir,
       target.rust,
       environment.configuration.rustName,
     );

@@ -47,6 +47,10 @@ jobs:
       FLUTTER_CHANNEL: ${{ github.event.inputs.flutter_version || 'beta' }}
       RUST_VERSION: 1.89.0
       BUILD_ARCH: ${{ github.event.inputs.build_arch || 'arm64' }}
+      # 让 cargokit 把 cargo 的 --target-dir 指到仓库内的固定路径（可被
+      # actions/cache 命中），而不是 Xcode 每次构建都变化的 TARGET_TEMP_DIR。
+      # 仓库内 rust/.gitignore 已含 /target，不会误提交。
+      CARGOKIT_CARGO_TARGET_DIR: ${{ github.workspace }}/rust/target
       # 手动触发时用输入值；被打 tag 触发时用该 tag。
       RELEASE_TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
 
@@ -150,6 +154,34 @@ jobs:
           flutter precache --macos
           flutter pub get
 
+      - name: 🗄️ 缓存 Cargo 依赖索引
+        # 注册表与 git 依赖（easytier 是 git 依赖，体积不小）。这部分命中率高、
+        # 体积小，是保险的收益。
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-deps-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ hashFiles('rust/Cargo.lock') }}
+          restore-keys: |
+            cargo-deps-${{ runner.os }}-${{ env.BUILD_ARCH }}-
+
+      - name: 🗄️ 缓存 Rust 编译产物
+        # 构建耗时几乎全部在这里（实测构建步骤 1095s，其余合计约 112s）。
+        #
+        # cargokit 默认把 cargo 的 --target-dir 指向 Xcode 的 TARGET_TEMP_DIR，
+        # 那在 DerivedData 下、每次构建路径都不同，Cargo 的增量缓存永远冷启动，
+        # actions/cache 也无从命中。因此我们在 workflow 里设
+        # CARGOKIT_CARGO_TARGET_DIR 指向仓库内的固定路径，并对该路径做缓存。
+        # 源码或 Cargo.lock 变化会让 key 失配，退化为 restore-keys 的部分命中
+        # （Cargo 仍能复用未受影响的 crate），cargo-bust-* 供手动强制冷构建。
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/rust/target
+          key: cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-${{ hashFiles('rust/Cargo.lock', 'rust/src/**', 'rust/build.rs', 'rust_builder/macos/rust_lib_astral.podspec') }}
+          restore-keys: |
+            cargo-target-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ env.RUST_VERSION }}-
+
       - name: 🍫 安装 CocoaPods 依赖
         run: |
           set -euo pipefail
@@ -164,6 +196,8 @@ jobs:
         run: |
           set -euo pipefail
           export PATH="$HOME/flutter/bin:$HOME/.cargo/bin:$PATH"
+          # 确认 cargokit 真的用了我们指定的稳定 target 目录，否则缓存形同虚设。
+          echo "CARGOKIT_CARGO_TARGET_DIR=${CARGOKIT_CARGO_TARGET_DIR:-<unset>}"
           # cargokit 在 Xcode 阶段编译 Rust；失败时输出会很长，持久化日志便于排错。
           # 必须开 pipefail：否则 flutter 失败会被 tee 的成功退出码掩盖，
           # 构建明明挂了却继续往下走。
@@ -171,6 +205,21 @@ jobs:
           flutter build macos --release \
             --build-name="${APP_VERSION}" \
             2>&1 | tee "$GITHUB_WORKSPACE/macos_build.log"
+
+      - name: 📏 报告缓存体积
+        # actions/cache 的限制是 10GB，超了整个 job 的保存会失败（只在 post 步骤报警，
+        # 很容易被忽略）。这里提前把体积打出来。
+        run: |
+          set -euo pipefail
+          TARGET="${CARGOKIT_CARGO_TARGET_DIR:-$GITHUB_WORKSPACE/rust/target}"
+          if [[ -d "$TARGET" ]]; then
+            echo "Rust target 目录: $TARGET"
+            du -sh "$TARGET"
+            du -sh "$TARGET"/* 2>/dev/null | sort -h | tail -5 || true
+          else
+            echo "::warning::未找到 $TARGET —— cargokit 可能没有使用指定目录，缓存将不会生效"
+          fi
+          du -sh "$HOME/.cargo/registry" "$HOME/.cargo/git" 2>/dev/null || true
 
       - name: 🔑 导入签名证书（可选，未配置则跳过）
         id: cert

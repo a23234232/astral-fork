@@ -205,6 +205,7 @@ for needle, what in required.items():
 known_actions = {
     "actions/checkout@v6",
     "actions/upload-artifact@v6",
+    "actions/cache@v4",
     "softprops/action-gh-release@v2",
 }
 node20_actions = {
@@ -227,6 +228,31 @@ elif not re.search(r"if:\s*\$\{\{\s*github\.event_name == 'push'", raw):
     fail("release step is not gated on a tag push / explicit release_tag")
 else:
     print("  ok: release publishing is opt-in and gated")
+
+# Caching: the Rust build dominates the job (~1095s of ~1207s measured), so the
+# cache must cover the cargo target dir. cargokit points --target-dir at Xcode's
+# per-build TARGET_TEMP_DIR, which is uncacheable, so the workflow has to redirect
+# it via CARGOKIT_CARGO_TARGET_DIR and cache that same fixed path.
+if "CARGOKIT_CARGO_TARGET_DIR" not in raw:
+    fail("workflow does not set CARGOKIT_CARGO_TARGET_DIR; cargo target dir "
+         "stays in Xcode's per-build temp dir and cannot be cached")
+else:
+    print("  ok: cargo target dir redirected to a stable path")
+if "actions/cache@" not in raw:
+    fail("workflow does not use actions/cache")
+else:
+    print("  ok: actions/cache wired")
+if "rust/target" not in raw:
+    fail("workflow does not cache rust/target")
+# The redirected target dir must stay gitignored or a multi-GB artifact tree
+# could be committed.
+if not (
+    (REPO / "rust" / ".gitignore").is_file()
+    and "/target" in (REPO / "rust" / ".gitignore").read_bytes().decode("utf-8")
+):
+    fail("rust/.gitignore no longer ignores /target; cargo output could be committed")
+else:
+    print("  ok: rust/target is gitignored")
 
 # The DMG must ship the Gatekeeper workaround, otherwise users hitting
 # "app is damaged" have no path forward on an unsigned build.
