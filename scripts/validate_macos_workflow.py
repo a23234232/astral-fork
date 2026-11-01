@@ -351,6 +351,18 @@ if "cache-hit != 'true'" not in raw:
          "download it unconditionally")
 else:
     print("  ok: snapshot restore gated on cache miss")
+
+# The snapshot switches between a single asset and N split parts as the archive
+# grows/shrinks. Without pruning, stale variants linger and the restore glob
+# downloads them too (observed: a leftover 893MiB unsplit asset next to the new
+# parts). Require explicit cleanup after upload.
+if "gh release delete-asset" not in raw:
+    fail(
+        "snapshot upload never prunes stale assets; a single-file/split switch "
+        "would leave dead assets that the restore glob still downloads"
+    )
+else:
+    print("  ok: stale snapshot assets are pruned")
 if not re.search(r"^\s{2}schedule:", raw, re.M):
     fail("no `schedule:` trigger; the cache would expire after 7 idle days")
 else:

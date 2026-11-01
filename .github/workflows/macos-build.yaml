@@ -378,6 +378,25 @@ jobs:
           fi
           gh release upload "$CACHE_SNAPSHOT_TAG" /tmp/snap/* --clobber
           echo "快照已上传"
+
+          # 清理不属于本次上传的旧资产。分卷数量会随体积变化（单文件 <-> 多分卷），
+          # 若只上传不清理，恢复时 `gh release download -p 'rust-target.tar.gz*'`
+          # 会把废弃的旧文件一并下载（实测曾遗留 893MiB 的未分卷旧资产）。
+          NEW_ASSETS="$(ls /tmp/snap | sort)"
+          echo "本次上传: $NEW_ASSETS"
+          while IFS= read -r old; do
+            [[ -z "$old" ]] && continue
+            case "$old" in
+              rust-target.tar.gz*) ;;
+              *) continue ;;
+            esac
+            if ! printf '%s\n' "$NEW_ASSETS" | grep -Fxq "$old"; then
+              echo "删除过期快照资产: $old"
+              gh release delete-asset "$CACHE_SNAPSHOT_TAG" "$old" --yes
+            fi
+          done < <(gh release view "$CACHE_SNAPSHOT_TAG" --json assets --jq '.assets[].name')
+
+          echo "=== 快照最终资产 ==="
           gh release view "$CACHE_SNAPSHOT_TAG" --json assets \
             --jq '.assets[] | .name + "  " + (.size|tostring)'
 
