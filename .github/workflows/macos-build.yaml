@@ -108,15 +108,28 @@ jobs:
 
           # 至少 Xcode 16：Flutter 生态的插件已陆续使用新一代 Swift 生成代码，
           # Xcode 15.x 的编译器会报 "unexpected ',' separator"。
-          MAJOR=$(xcodebuild -version | head -1 | sed -E 's/^Xcode ([0-9]+).*/\1/')
+          #
+          # 注意：不要写成 `xcodebuild -version | head -1`。head 读完首行即关闭
+          # 管道，而 xcodebuild 还会写 "Build version ..." 第二行，于是收到
+          # SIGPIPE，macOS 上会抛 NSFileHandleOperationException 直接 abort
+          # （exit 134）。这是竞态，曾经偶发通过、也偶发失败。改为先完整捕获
+          # 输出，再用纯 shell 参数展开解析，完全不产生管道。
+          XCODE_OUT="$(xcodebuild -version)"
+          echo "$XCODE_OUT"
+          XCODE_FIRST="${XCODE_OUT%%$'\n'*}"   # 例: "Xcode 16.4"
+          XCODE_VER="${XCODE_FIRST#Xcode }"    # 例: "16.4"
+          MAJOR="${XCODE_VER%%.*}"             # 例: "16"
+          if [[ -z "$MAJOR" || ! "$MAJOR" =~ ^[0-9]+$ ]]; then
+            echo "::error::无法解析 Xcode 版本（首行: '$XCODE_FIRST'）"
+            exit 1
+          fi
           echo "Xcode major = $MAJOR"
-          if [[ -z "$MAJOR" || "$MAJOR" -lt 16 ]]; then
+          if (( MAJOR < 16 )); then
             echo "::error::需要 Xcode >= 16（当前 $MAJOR）。请用 macos-15 或更新镜像。"
             exit 1
           fi
 
           # 供缓存 key 使用：Xcode 版本变了，Rust 静态库/原生产物就不可复用。
-          XCODE_VER=$(xcodebuild -version | head -1 | sed -E 's/^Xcode ([0-9.]+).*/\1/')
           echo "XCODE_VERSION=$XCODE_VER" >> "$GITHUB_ENV"
           echo "缓存 key 将使用 Xcode $XCODE_VER"
 
@@ -126,7 +139,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             VERSION="${GITHUB_REF#refs/tags/v}"
           else
-            VERSION=$(grep '^version:' pubspec.yaml | head -1 | awk '{print $2}' | tr -d '\r')
+            # awk 读完即退出，下游 tr 会读到 EOF，不会像 `grep|head` 那样产生
+            # SIGPIPE + pipefail 的偶发失败。
+            VERSION=$(awk '/^version:/{print $2; exit}' pubspec.yaml | tr -d '\r')
             VERSION="${VERSION%%+*}"
           fi
           echo "APP_VERSION=$VERSION" >> "$GITHUB_ENV"
@@ -178,7 +193,7 @@ jobs:
 
           echo "protoc: $(protoc --version)"
           echo "cocoapods: $(pod --version)"
-          echo "cmake: $(cmake --version | head -1)"
+          echo "cmake: $(cmake --version | { read -r l; echo "$l"; })"
           echo "ninja: $(ninja --version)"
 
       - name: 🐦 安装 Flutter
@@ -292,7 +307,7 @@ jobs:
           # sentry/file_picker 等），会与 pod install 解析结果冲突，这里直接重建。
           rm -f Podfile.lock
           pod install --repo-update
-          ls -la Pods/ | head -20
+          ls -la Pods/ | head -20 || true
 
       - name: 🛠️ 构建 macOS 应用
         run: |
@@ -442,7 +457,7 @@ jobs:
           echo "=== 主程序架构 ==="
           lipo -info "$APP/Contents/MacOS/astral"
           echo "=== 动态库依赖 ==="
-          otool -L "$APP/Contents/MacOS/astral" | head -20
+          otool -L "$APP/Contents/MacOS/astral" | head -20 || true
           echo "=== 最低系统版本 ==="
           /usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist" || true
 

@@ -105,6 +105,21 @@ for job_name, job in jobs.items():
                 # Without pipefail the step reports tee's exit status, so a failed
                 # build silently passes.
                 fail(f"step '{name}': pipes into tee without `set -o pipefail`")
+
+            # `xcodebuild -version | head -1` is a SIGPIPE race on macOS: head
+            # closes the pipe after the first line while xcodebuild is still
+            # writing "Build version ...", which raises an NSFileHandle exception
+            # and aborts the step with exit 134. Observed intermittently in CI.
+            # Comments are stripped first so a comment explaining the pitfall
+            # does not trip the rule.
+            code_lines = [
+                ln for ln in body.splitlines() if not ln.lstrip().startswith("#")
+            ]
+            if re.search(r"xcodebuild[^\n|]*\|\s*head", "\n".join(code_lines)):
+                fail(
+                    f"step '{name}': pipes xcodebuild into head; SIGPIPE can abort "
+                    "the step (exit 134). Capture the output first, then parse it."
+                )
         if has_uses:
             ref = str(step["uses"])
             if not re.match(r"^[\w.\-]+/[\w.\-]+@[\w.\-]+$", ref):
@@ -261,7 +276,7 @@ else:
             f"runner {runner} ships Xcode < 16, which cannot compile current "
             "Flutter plugin Swift (unexpected ',' separator); use macos-15+"
         )
-if "$MAJOR" not in raw or "-lt 16" not in raw:
+if "MAJOR" not in raw or not re.search(r"(?:-lt\s+16|MAJOR\s*<\s*16)", raw):
     fail("no runtime assertion that the runner's Xcode is >= 16")
 else:
     print("  ok: Xcode >= 16 asserted at runtime")
