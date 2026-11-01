@@ -80,6 +80,10 @@ class VpnManager {
       mtu: mtu,
       routes: routes,
       disallowedApplications: disallowedApplications,
+      notificationsEnabled: ServiceManager()
+          .appSettingsState
+          .enableConnectionNotification
+          .value,
     );
   }
 
@@ -88,6 +92,71 @@ class VpnManager {
     final plugin = _plugin;
     if (plugin == null) return;
     await plugin.stopVpn();
+  }
+
+  /// 启动连接保活前台服务
+  ///
+  /// 连接通知不再由 Dart 侧 flutter_local_notifications 发出，而是由原生前台服务持有：
+  /// 进程被 kill -9 / 系统回收时 Dart 无法执行取消代码，而 Android 只会清理前台服务
+  /// 持有的通知，普通 ongoing 通知会永久残留（issue #263）。
+  Future<void> startKeepAlive({
+    required String status,
+    required String ip,
+    required String duration,
+    bool showContent = true,
+  }) async {
+    final plugin = _plugin;
+    if (plugin == null) return;
+    await plugin.startKeepAlive(
+      status: status,
+      ip: ip,
+      duration: duration,
+      showContent: showContent,
+    );
+  }
+
+  /// 停止连接保活前台服务（同时移除系统前台通知）
+  Future<void> stopKeepAlive() async {
+    final plugin = _plugin;
+    if (plugin == null) return;
+    await plugin.stopKeepAlive();
+  }
+
+  /// 更新连接通知内容（IP / 时长）
+  Future<void> updateNotification({
+    required String status,
+    required String ip,
+    required String duration,
+  }) async {
+    final plugin = _plugin;
+    if (plugin == null) return;
+    await plugin.updateNotification(
+      status: status,
+      ip: ip,
+      duration: duration,
+    );
+  }
+
+  /// 隐藏连接通知内容（前台服务仍必须保留一条最小通知）
+  Future<void> hideNotification() async {
+    final plugin = _plugin;
+    if (plugin == null) return;
+    await plugin.hideNotification();
+  }
+
+  /// 重新展示连接通知内容
+  Future<void> showNotification({
+    required String status,
+    required String ip,
+    required String duration,
+  }) async {
+    final plugin = _plugin;
+    if (plugin == null) return;
+    await plugin.showNotification(
+      status: status,
+      ip: ip,
+      duration: duration,
+    );
   }
 
   /// 将 TUN fd 传递给 Rust 层

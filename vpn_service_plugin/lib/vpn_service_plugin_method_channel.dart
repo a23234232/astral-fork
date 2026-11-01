@@ -21,6 +21,7 @@ class MethodChannelVpnServicePlugin extends VpnServicePluginPlatform {
     String? dns,
     List<String>? disallowedApplications,
     int? mtu,
+    bool notificationsEnabled = true,
   }) async {
     final result = await methodChannel
         .invokeMethod<Map<Object?, Object?>>('startVpn', {
@@ -29,6 +30,7 @@ class MethodChannelVpnServicePlugin extends VpnServicePluginPlatform {
           'dns': dns,
           'disallowedApplications': disallowedApplications,
           'mtu': mtu,
+          'notificationsEnabled': notificationsEnabled,
         });
     return Map<String, dynamic>.from(result ?? {});
   }
@@ -37,5 +39,56 @@ class MethodChannelVpnServicePlugin extends VpnServicePluginPlatform {
   Future<Map<String, dynamic>> stopVpn() async {
     await methodChannel.invokeMethod<void>('stopVpn');
     return {}; // Return an empty map to match the required return type
+  }
+
+  @override
+  Future<void> startKeepAlive({
+    required String status,
+    required String ip,
+    required String duration,
+    bool showContent = true,
+  }) async {
+    await methodChannel.invokeMethod<void>('startKeepAlive', {
+      'status': status,
+      'ip': ip,
+      'duration': duration,
+      'showContent': showContent,
+    });
+  }
+
+  @override
+  Future<void> stopKeepAlive() async {
+    await methodChannel.invokeMethod<void>('stopKeepAlive');
+  }
+
+  @override
+  Future<void> updateNotification({
+    required String status,
+    required String ip,
+    required String duration,
+  }) async {
+    await methodChannel.invokeMethod<void>('updateNotification', {
+      'status': status,
+      'ip': ip,
+      'duration': duration,
+    });
+  }
+
+  @override
+  Future<void> hideNotification() async {
+    await methodChannel.invokeMethod<void>('hideNotification');
+  }
+
+  @override
+  Future<void> showNotification({
+    required String status,
+    required String ip,
+    required String duration,
+  }) async {
+    await methodChannel.invokeMethod<void>('showNotification', {
+      'status': status,
+      'ip': ip,
+      'duration': duration,
+    });
   }
 }

@@ -86,7 +86,10 @@ class ConnectionNetworkMonitor {
             .appSettingsState
             .enableConnectionNotification
             .value) {
-          await ServiceManager().notifications.showConnectionNotification(
+          // 连接通知由原生保活前台服务持有（TUN / NO-TUN 一致），
+          // 每秒刷新 IP / 时长直接走原生 updateNotification，
+          // 不再发普通通知，避免进程被杀后通知残留（issue #263）。
+          await ServiceManager().vpn.updateNotification(
             status: '已连接',
             ip: notificationDisplayIp(),
             duration: formattedDuration,

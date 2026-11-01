@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:astral/core/builders/server_config_builder.dart';
 import 'package:astral/core/models/network_config_share.dart';
+import 'package:astral/core/platform/local_prefs.dart';
 import 'package:astral/core/services/connection_network_monitor.dart';
 import 'package:astral/core/services/connection_status_tracker.dart';
 import 'package:astral/core/services/service_manager.dart';
@@ -214,8 +215,12 @@ class ServerConnectionManager {
     // 停止VPN
     if (Platform.isAndroid) {
       if (!ServiceManager().networkConfigState.noTun.value) {
+        // 原生 stopVpn 内部会同时停止保活服务并移除前台通知
         await ServiceManager().vpn.stop();
       }
+      // 兜底：NO-TUN / 异常路径下也要停止保活服务，移除系统前台通知
+      await ServiceManager().vpn.stopKeepAlive();
+      // 兜底：清理旧版本 flutter_local_notifications 可能遗留的普通通知
       await ServiceManager().notifications.cancelConnectionNotification();
     }
 
@@ -247,13 +252,22 @@ class ServerConnectionManager {
       }
     }
 
+    // #243：房间自带服务器时，默认只使用房间服务器；仅当用户开启
+    // 「连接房间时同时使用我的全局服务器」偏好时，才把全局启用服务器合并进来
+    // （恢复旧行为）。偏好存本地 JSON（LocalPrefs），不动 Isar schema。
+    final useGlobalServers = await LocalPrefs.getUseGlobalServersWithRoom();
+
     // 使用Builder构建配置
     final config =
         ServerConfigBuilder(services)
             .withPlayerInfo()
             .withRoom(room)
             .withRoomConfig(roomConfig)
-            .withServers(room, services.serverState.servers.value)
+            .withServers(
+              room,
+              services.serverState.servers.value,
+              includeGlobalServers: useGlobalServers,
+            )
             .withListeners(services.playerState.listenList.value)
             .withCidrs(services.vpnState.customVpn.value)
             .withFlags()
@@ -279,11 +293,18 @@ class ServerConnectionManager {
     ServiceManager().connectionState.connectionState.value = CoState.connecting;
 
     // 显示通知（Android）
-    if (Platform.isAndroid && ServiceManager().appSettingsState.enableConnectionNotification.value) {
-      await ServiceManager().notifications.showConnectionNotification(
+    // 连接阶段就把通知挂到原生保活前台服务上（TUN / NO-TUN 一致）：
+    // 进程随后被 kill -9 / 系统回收时，通知会随前台服务被系统一并清理，
+    // 不会再出现「连接中」永久残留（issue #263）。
+    if (Platform.isAndroid) {
+      await ServiceManager().vpn.startKeepAlive(
         status: '连接中',
         ip: '正在获取...',
         duration: '00:00',
+        showContent: ServiceManager()
+            .appSettingsState
+            .enableConnectionNotification
+            .value,
       );
     }
 
@@ -324,6 +345,20 @@ class ServerConnectionManager {
         proxyCidrs: proxyCidrs,
       );
 
+      // 通知已由原生前台服务持有，这里更新为「已连接」内容
+      //（NotificationService 内部会转成原生 updateNotification）
+      if (ServiceManager().appSettingsState.enableConnectionNotification.value) {
+        await ServiceManager().notifications.showConnectionNotification(
+          status: '已连接',
+          ip: ConnectionNetworkMonitor.notificationDisplayIp(),
+          duration: NotificationService.formatDuration(
+            _networkMonitor.connectionDuration,
+          ),
+        );
+      }
+    } else if (Platform.isAndroid) {
+      // NO-TUN 模式没有 TUN 接口，但连接通知同样由原生保活服务持有，
+      // 进程被杀后不会残留（#264 漏掉了这个分支，NO-TUN 下照旧残留）
       if (ServiceManager().appSettingsState.enableConnectionNotification.value) {
         await ServiceManager().notifications.showConnectionNotification(
           status: '已连接',

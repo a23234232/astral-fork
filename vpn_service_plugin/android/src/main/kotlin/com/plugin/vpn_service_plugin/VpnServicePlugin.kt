@@ -3,6 +3,7 @@ package com.plugin.vpn_service_plugin
 import android.app.Activity
 import android.content.Intent
 import android.net.VpnService
+import android.os.Build
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
@@ -60,10 +61,12 @@ class VpnServicePlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                     result.success(mapOf<String, Any>())
                 }
             }
-            // 启动VPN服务
+            // 启动VPN服务（仅建立TUN；连接通知由独立的前台保活服务持有）
             "startVpn" -> {
                 val args = call.arguments<Map<String, Any>>()
                 // 停止现有VPN服务
+                // 注意：必须保留这行——连接后网络监控会因路由变化反复调用 startVpn，
+                // 先关闭旧 TUN 才不会重复 establish 导致 fd 泄漏 / 路由叠加（#264 误删）
                 TauriVpnService.self?.onRevoke()
 
                 val intent = VpnService.prepare(activity)
@@ -100,7 +103,23 @@ class VpnServicePlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
                         serviceIntent.putExtra("MTU", mtu)
                     }
 
+                    // TauriVpnService 只负责建立 TUN，不持有通知，因此继续使用普通
+                    // startService 启动即可（不能改成 startForegroundService，
+                    // 否则未调用 startForeground 会被系统判定超时并 crash 进程）。
                     activity.startService(serviceIntent)
+
+                    // 连接通知由独立前台服务持有；仅在保活服务尚未运行时启动/刷新，
+                    // 避免覆盖 Dart 侧刚设置的开关状态与通知内容。
+                    if (AstralKeepAliveService.instance == null) {
+                        val notificationsEnabled =
+                            (args?.get("notificationsEnabled") as? Boolean) ?: true
+                        startKeepAlive(
+                            status = "连接中",
+                            ip = "正在获取...",
+                            duration = "00:00",
+                            showContent = notificationsEnabled,
+                        )
+                    }
                     result.success(mapOf<String, Any>())
                 }
             }
@@ -108,9 +127,93 @@ class VpnServicePlugin: FlutterPlugin, MethodCallHandler, ActivityAware {
             "stopVpn" -> {
                 TauriVpnService.self?.onRevoke()
                 activity.stopService(Intent(activity, TauriVpnService::class.java))
+                // 停止保活服务：前台通知随服务一起移除
+                stopKeepAlive()
+                result.success(mapOf<String, Any>())
+            }
+            // 启动连接保活前台服务（连接通知由它持有，进程被杀时系统自动清理）
+            "startKeepAlive" -> {
+                val args = call.arguments<Map<String, Any>>()
+                startKeepAlive(
+                    status = (args?.get("status") as? String) ?: "连接中",
+                    ip = (args?.get("ip") as? String) ?: "正在获取...",
+                    duration = (args?.get("duration") as? String) ?: "00:00",
+                    showContent = (args?.get("showContent") as? Boolean) ?: true,
+                )
+                result.success(mapOf<String, Any>())
+            }
+            // 停止连接保活前台服务（同时移除前台通知）
+            "stopKeepAlive" -> {
+                stopKeepAlive()
+                result.success(mapOf<String, Any>())
+            }
+            // 更新连接通知内容
+            "updateNotification" -> {
+                val args = call.arguments<Map<String, Any>>()
+                AstralKeepAliveService.instance?.update(
+                    (args?.get("status") as? String) ?: "",
+                    (args?.get("ip") as? String) ?: "",
+                    (args?.get("duration") as? String) ?: "",
+                )
+                result.success(mapOf<String, Any>())
+            }
+            // 隐藏通知内容（设置中关闭连接通知；前台服务仍需保留一条最小通知）
+            "hideNotification" -> {
+                AstralKeepAliveService.instance?.hideContent()
+                result.success(mapOf<String, Any>())
+            }
+            // 重新展示通知内容（设置中重新打开连接通知）
+            "showNotification" -> {
+                val args = call.arguments<Map<String, Any>>()
+                AstralKeepAliveService.instance?.showContentAgain(
+                    (args?.get("status") as? String) ?: "已连接",
+                    (args?.get("ip") as? String) ?: "",
+                    (args?.get("duration") as? String) ?: "00:00",
+                )
                 result.success(mapOf<String, Any>())
             }
             else -> result.notImplemented()
+        }
+    }
+
+    // 启动连接保活前台服务：通知由前台服务持有，进程被杀时通知随服务被系统清理
+    private fun startKeepAlive(
+        status: String,
+        ip: String,
+        duration: String,
+        showContent: Boolean,
+    ) {
+        try {
+            val intent = Intent(activity, AstralKeepAliveService::class.java).apply {
+                action = AstralKeepAliveService.ACTION_START
+                putExtra(AstralKeepAliveService.EXTRA_STATUS, status)
+                putExtra(AstralKeepAliveService.EXTRA_IP, ip)
+                putExtra(AstralKeepAliveService.EXTRA_DURATION, duration)
+                putExtra(AstralKeepAliveService.EXTRA_SHOW_CONTENT, showContent)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                // 服务在 onStartCommand 内会立即 startForeground，符合 FGS 启动契约
+                activity.startForegroundService(intent)
+            } else {
+                activity.startService(intent)
+            }
+        } catch (e: Exception) {
+            // Android 12+ 在后台启动前台服务会抛 ForegroundServiceStartNotAllowedException，
+            // 这里降级为不展示通知，绝不让通知问题把连接流程搞崩
+            println("startKeepAlive failed: $e")
+        }
+    }
+
+    // 停止连接保活前台服务（幂等）
+    private fun stopKeepAlive() {
+        try {
+            // 优先让已存活的实例自行退出并移除通知
+            AstralKeepAliveService.instance?.stopMe()
+            // 兜底：实例为空但服务仍在运行时直接停止服务，onDestroy 会清理通知
+            // （stopService 不受 Android 12+ 后台启动前台服务限制）
+            activity.stopService(Intent(activity, AstralKeepAliveService::class.java))
+        } catch (e: Exception) {
+            println("stopKeepAlive failed: $e")
         }
     }
 

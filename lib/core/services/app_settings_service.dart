@@ -1,6 +1,8 @@
 import 'package:astral/core/services/service_manager.dart';
 import 'dart:io';
 
+import 'package:astral/core/services/connection_network_monitor.dart';
+import 'package:astral/core/states/connection_state.dart';
 import 'package:astral/core/states/player_state.dart';
 import 'package:astral/core/states/display_state.dart';
 import 'package:astral/core/states/startup_state.dart';
@@ -193,8 +195,33 @@ class AppSettingsService {
     appSettingsState.updateEnableConnectionNotification(enable);
     await _repo.update((s) => s.enableConnectionNotification = enable);
 
-    if (!enable && Platform.isAndroid) {
-      await ServiceManager().notifications.cancelConnectionNotification();
+    if (!Platform.isAndroid) return;
+
+    // Android：连接通知由原生保活前台服务持有（TUN / NO-TUN 一致），
+    // 开关切换直接改原生通知内容，不再走普通通知，避免进程被杀后残留（issue #263）。
+    if (!enable) {
+      // 关闭连接通知：Android 不允许前台服务没有通知，因此仍会保留一条
+      // 不含状态 / IP / 时长的最小通知；该通知会随服务在进程结束时被系统清理。
+      await ServiceManager().vpn.hideNotification();
+      return;
+    }
+
+    // 重新打开：连接中/已连接时立即恢复完整内容；
+    // 未连接时保活服务未运行，调用安全地无操作，下次连接会带内容启动。
+    // 时长在下一次网络监控轮询（约 1 秒）时刷新。
+    final state = ServiceManager().connectionState.connectionState.value;
+    if (state == CoState.connecting) {
+      await ServiceManager().vpn.showNotification(
+        status: '连接中',
+        ip: '正在获取...',
+        duration: '00:00',
+      );
+    } else if (state == CoState.connected) {
+      await ServiceManager().vpn.showNotification(
+        status: '已连接',
+        ip: ConnectionNetworkMonitor.notificationDisplayIp(),
+        duration: '00:00',
+      );
     }
   }
 
