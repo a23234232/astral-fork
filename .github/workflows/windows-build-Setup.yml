@@ -16,8 +16,12 @@ jobs:
       packages: write
 
     env:
-      FLUTTER_VERSION: beta
+      # 固定版本而不是 beta：beta 是移动分支，会触发 pub 整图重解析。
+      FLUTTER_VERSION: 3.47.9
       FLUTTER_CHANNEL: beta
+      # 与 pubspec.lock 中记录的包源一致，否则 --enforce-lockfile 会失败
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
       RUST_VERSION: 1.89.0
       
     steps:
@@ -46,7 +50,7 @@ jobs:
       - name: 📦 安装 Flutter 依赖
         run: |
           echo "正在获取 Flutter 依赖..."
-          flutter pub get
+          flutter pub get --enforce-lockfile
           echo "Flutter 依赖安装完成！"
         shell: pwsh
 
