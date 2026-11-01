@@ -13,11 +13,15 @@ jobs:
       matrix:
         include:
           - arch: x64
-            runs-on: ubuntu-latest
+            # 固定 ubuntu-22.04（glibc 2.35）以兼容 Ubuntu 22.04 / Debian 12：
+            # ubuntu-latest（24.04）产出的 librust_lib_astral.so 会要求
+            # GLIBC_2.39，旧发行版启动即报 "version GLIBC_2.39 not found"（#194）。
+            runs-on: ubuntu-22.04
             bundle-dir: build/linux/x64/release/bundle
             release-prefix: astral-linux-x64
             artifact-name: astral-linux-x64-all
           - arch: arm64
+            # arm64 没有 ubuntu-22.04 runner，继续用 24.04
             runs-on: ubuntu-24.04-arm
             bundle-dir: build/linux/arm64/release/bundle
             release-prefix: astral-linux-arm64
@@ -99,16 +103,62 @@ jobs:
           echo "打包完成，检查文件大小："
           ls -lh "$GITHUB_WORKSPACE/release/"
 
+      - name: 📂 准备打包目录（/usr/bin/astral + 桌面图标 + pixmap）
+        run: |
+          set -e
+          STAGING="$GITHUB_WORKSPACE/build/linux/pkgroot"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/opt/astral"
+          # bundle 已在「打包应用」步骤完成 patchelf，这里复制的是最终产物
+          cp -a "$BUNDLE_DIR/." "$STAGING/opt/astral/"
+          # 恢复 v2.8.5 的安装步骤（v2.8.6 起丢失，导致桌面图标与
+          # /usr/bin/astral 缺失，用户只能从终端 sudo 启动，见 #250）：
+          #   /usr/bin/astral        -> 包装脚本，exec /opt/astral/astral
+          #   /usr/share/applications -> 桌面入口（Exec=/usr/bin/astral）
+          #   /usr/share/pixmaps      -> 图标（desktop 里的 Icon=astral）
+          install -Dm755 linux/packaging/astral-cli.sh "$STAGING/usr/bin/astral"
+          install -Dm644 linux/packaging/astral.desktop "$STAGING/usr/share/applications/astral.desktop"
+          install -Dm644 assets/logo.png "$STAGING/usr/share/pixmaps/astral.png"
+          ls -l "$STAGING/usr/bin/astral" \
+                "$STAGING/usr/share/applications/astral.desktop" \
+                "$STAGING/usr/share/pixmaps/astral.png"
+          ls "$STAGING/opt/astral"
+
       - name: 📦 打包 deb 包
         run: |
+          set -e
           mkdir -p release
-          fpm -s dir -t deb -n astral -v "${APP_VERSION}" --prefix /opt/astral -C "$BUNDLE_DIR" .
+          STAGING="$GITHUB_WORKSPACE/build/linux/pkgroot"
+          # --depends 修复 #193：tray_manager 的 Linux 插件硬依赖
+          # libayatana-appindicator3.so.1，包内不声明依赖时，干净系统安装后
+          # 启动即报 "error while loading shared libraries"。
+          # 另补 GTK3 运行库，其余依赖保持最小、交给发行版自动解析。
+          fpm -s dir -t deb -n astral -v "${APP_VERSION}" \
+            --depends 'libayatana-appindicator3-1' \
+            --depends 'libgtk-3-0' \
+            -C "$STAGING" .
           mv *.deb "$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.deb"
 
       - name: 📦 打包 rpm 包
         run: |
+          set -e
           mkdir -p release
-          fpm -s dir -t rpm -n astral -v "${APP_VERSION}" --prefix /opt/astral -C "$BUNDLE_DIR" .
+          STAGING="$GITHUB_WORKSPACE/build/linux/pkgroot"
+          # rpm 侧优先声明 soname 依赖，跨 Fedora / OpenEuler 更稳（不依赖
+          # 发行版包名差异）。注意 rpm 的 soname 依赖后缀随架构变化：
+          # x86_64 为 64bit，arm64 为 aarch64。
+          if [[ "${RELEASE_PREFIX}" == *arm64* ]]; then
+            RPM_ABI="aarch64"
+          else
+            RPM_ABI="64bit"
+          fi
+          # 取舍：若目标 fpm 版本对 soname 语法支持有问题，可退回包名
+          #   Fedora:   libayatana-appindicator-gtk3
+          #   OpenEuler: libayatana-appindicator3-1
+          fpm -s dir -t rpm -n astral -v "${APP_VERSION}" \
+            --depends "libayatana-appindicator3.so.1()(${RPM_ABI})" \
+            --depends 'gtk3' \
+            -C "$STAGING" .
           mv *.rpm "$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.rpm"
 
       - name: 📤 上传 Linux 构建产物 (${{ matrix.arch }})

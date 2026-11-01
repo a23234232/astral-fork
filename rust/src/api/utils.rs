@@ -17,9 +17,16 @@ pub fn check_sudo() -> bool {
         if args.contains(&AUTOSTART_ARG.to_owned()) {
             stdcmd.arg(AUTOSTART_ARG);
         }
-        elevated_command::Command::new(stdcmd)
-            .output()
-            .expect("Failed to run elevated command");
+        // 注意：用户取消系统密码框、或系统没有可用的提权手段时，crate 会返回 Err。
+        // 这里绝对不能 panic：否则 Dart 侧收不到返回值，整个应用会直接崩溃（#189）。
+        // 失败时仅记录原因并返回 false，由 Dart 侧决定继续以无特权模式运行。
+        match elevated_command::Command::new(stdcmd).output() {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("elevated command failed: {e}");
+                return false;
+            }
+        }
     }
     is_elevated
 }

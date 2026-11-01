@@ -4,7 +4,7 @@
 
   [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ldoubil/astral)
   ![License](https://img.shields.io/badge/License-PolyForm%20Noncommercial%201.0.0-lightgrey.svg)
-  ![Platforms](https://img.shields.io/badge/平台-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android%20%7C%20iOS-blue?style=flat-square)
+  ![Platforms](https://img.shields.io/badge/平台-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Android-blue?style=flat-square)
   ![Languages](https://img.shields.io/badge/多语言支持-中文%7C英文%7C德文%7C西班牙文%7C法文%7C日文%7C韩文%7C俄文-orange?style=flat-square)
   
   ![访问次数](https://count.getloli.com/@astral?name=astral-home&theme=original-new&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
@@ -19,8 +19,9 @@ Astral 是一个基于 EasyTier 的跨平台网络应用，提供简单易用的
 - 🌐 **P2P 网络连接** - 基于 EasyTier 的去中心化网络架构
 - 🔒 **VPN 服务** - 安全的虚拟专用网络连接
 - 🖥️ **跨平台支持** - 全面支持多种操作系统和设备
-  - 💻 **桌面平台**: Windows、macOS、Linux
-  - 📱 **移动平台**: Android、iOS
+  - 💻 **桌面平台**: Windows、Linux，以及 **macOS（实验性）**——未使用付费证书签名，首次启动需右键打开或执行 `xattr -dr com.apple.quarantine`，详见 [macos/INSTALL.txt](macos/INSTALL.txt)
+  - 📱 **移动平台**: Android
+  - ❌ **iOS 暂不提供**：iOS 的 TUN 必须通过 NetworkExtension 实现，需要付费 Apple Developer 账号与签名分发渠道，当前没有可安装的 IPA 产物
 - 🌍 **多语言支持** - 提供多种语言界面
 - 🎨 **现代化界面** - 基于 Flutter 的美观用户界面
 - ⚡ **高性能** - Rust 后端确保高效的网络处理

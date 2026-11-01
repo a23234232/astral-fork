@@ -47,8 +47,15 @@ class WindowManagerUtils {
 
       await windowManager.setPreventClose(true);
 
+      // 启动路径只做「补齐」，不做迁移/覆盖（对应 issue #259）：
+      // - 自启已开启且计划任务不存在 → 创建一次（避免任务被系统清理后永久失效）；
+      // - 任务已存在 → 保持原样，不用 /f 重建，尊重用户对触发器/延迟的修改；
+      // - 设置关闭 → 什么都不做。同名计划任务可能是用户自己创建的，不能在启动时删。
+      // 旧版 HKCU Run / 启动文件夹自启项的清理只在用户主动切换设置时执行
+      // （见 app_settings_service.setStartup → handleStartupSetting 默认 migrateLegacy=true）。
       await handleStartupSetting(
         ServiceManager().startupState.startup.value,
+        migrateLegacy: false,
       );
     }
   }
