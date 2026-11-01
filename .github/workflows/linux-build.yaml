@@ -163,38 +163,67 @@ jobs:
 
       # 打包产物自检：把「依赖已声明 / 桌面入口与 /usr/bin 已安装 / glibc 上限」
       # 从「希望没问题」变成「构建失败即报警」，避免又出现 #193 那种装完起不来的包。
+      #
+      # 注意：这里刻意不用 `dpkg-deb -c ... | grep -q` 这类写法——grep -q 命中即退出，
+      # 会让上游的 tar 收到 SIGPIPE（tar: stdout: write error），再叠加 `pipefail`
+      # 就把「检查通过」误判成失败。统一改成「先整体捕获到变量，再用 case 匹配」。
       - name: ✅ 校验打包结果（依赖 / 桌面入口 / glibc 上限）
         run: |
           set -euo pipefail
           DEB="$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.deb"
           RPMF="$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.rpm"
 
+          DEB_DEPS="$(dpkg-deb -f "$DEB" Depends)"
+          DEB_LIST="$(dpkg-deb -c "$DEB")"
+
           echo "== deb 依赖 =="
-          dpkg-deb -f "$DEB" Depends
-          dpkg-deb -f "$DEB" Depends | grep -q 'libayatana-appindicator3-1' \
-            || { echo "❌ deb 缺少 libayatana-appindicator3-1 依赖（#193）"; exit 1; }
-          dpkg-deb -f "$DEB" Depends | grep -q 'libgtk-3-0' \
-            || { echo "❌ deb 缺少 libgtk-3-0 依赖"; exit 1; }
+          echo "$DEB_DEPS"
+          case "$DEB_DEPS" in
+            *libayatana-appindicator3-1*) ;;
+            *) echo "❌ deb 缺少 libayatana-appindicator3-1 依赖（#193）"; exit 1 ;;
+          esac
+          case "$DEB_DEPS" in
+            *libgtk-3-0*) ;;
+            *) echo "❌ deb 缺少 libgtk-3-0 依赖"; exit 1 ;;
+          esac
 
           echo "== deb 载荷（桌面入口 / 包装脚本 / 图标）=="
-          dpkg-deb -c "$DEB" | grep -E 'usr/(bin/astral|share/applications/astral\.desktop|share/pixmaps/astral\.png)' \
-            || { echo "❌ deb 缺少 /usr/bin/astral 或桌面入口（#250）"; exit 1; }
-          dpkg-deb -c "$DEB" | grep -q './opt/astral/astral' \
-            || { echo "❌ deb 缺少 /opt/astral/astral"; exit 1; }
+          case "$DEB_LIST" in
+            *./usr/bin/astral*) echo "  ✓ /usr/bin/astral" ;;
+            *) echo "❌ deb 缺少 /usr/bin/astral（#250）"; exit 1 ;;
+          esac
+          case "$DEB_LIST" in
+            *./usr/share/applications/astral.desktop*) echo "  ✓ astral.desktop" ;;
+            *) echo "❌ deb 缺少桌面入口（#250）"; exit 1 ;;
+          esac
+          case "$DEB_LIST" in
+            *./usr/share/pixmaps/astral.png*) echo "  ✓ astral.png" ;;
+            *) echo "❌ deb 缺少图标（#250）"; exit 1 ;;
+          esac
+          case "$DEB_LIST" in
+            *./opt/astral/astral*) echo "  ✓ /opt/astral/astral" ;;
+            *) echo "❌ deb 缺少 /opt/astral/astral"; exit 1 ;;
+          esac
 
-          echo "== rpm 依赖 =="
+          echo "== rpm 依赖与载荷 =="
           sudo apt-get install -y rpm > /dev/null 2>&1 || true
-          rpm -qpR "$RPMF" || true
-          rpm -qpR "$RPMF" | grep -q 'libayatana-appindicator3.so.1' \
-            || { echo "❌ rpm 缺少 libayatana-appindicator3 soname 依赖（#193）"; exit 1; }
-          rpm -qlp "$RPMF" | grep -q '/usr/bin/astral' \
-            || { echo "❌ rpm 缺少 /usr/bin/astral（#250）"; exit 1; }
+          RPM_REQ="$(rpm -qpR "$RPMF" 2>/dev/null || true)"
+          RPM_LIST="$(rpm -qlp "$RPMF" 2>/dev/null || true)"
+          echo "$RPM_REQ"
+          case "$RPM_REQ" in
+            *libayatana-appindicator3.so.1*) ;;
+            *) echo "❌ rpm 缺少 libayatana-appindicator3 soname 依赖（#193）"; exit 1 ;;
+          esac
+          case "$RPM_LIST" in
+            */usr/bin/astral*) echo "  ✓ rpm /usr/bin/astral" ;;
+            *) echo "❌ rpm 缺少 /usr/bin/astral（#250）"; exit 1 ;;
+          esac
 
           # x64 包固定用 ubuntu-22.04 构建（glibc 2.35），避免旧发行版起不来（#194）。
           # arm64 runner 只有 24.04（glibc 2.39），不做该断言。
           if [[ "${RELEASE_PREFIX}" == *x64* ]]; then
             # 用 -print -quit 让 find 自己停，避免 `find | head` 在 pipefail 下
-            # 因 SIGPIPE 误判失败（这类竞态在 macOS 构建里已经踩过一次）。
+            # 因 SIGPIPE 误判失败。
             RUST_LIB="$(find "$GITHUB_WORKSPACE/build/linux/pkgroot/opt/astral" -name 'librust_lib_astral.so' -print -quit)"
             if [ -n "$RUST_LIB" ]; then
               MAX_GLIBC="$(objdump -T "$RUST_LIB" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)"
