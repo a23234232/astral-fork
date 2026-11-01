@@ -133,14 +133,42 @@ jobs:
 
       - name: 🔧 设置 bindgen 环境变量
         run: |
-          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I/usr/include/x86_64-linux-gnu" >> $GITHUB_ENV
-          echo "LIBCLANG_PATH=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
-          # 创建 Rust 工具链配置
+          set -euo pipefail
+          # 交叉编译到 Android 时**绝不能**把宿主机的 /usr/include 塞给 bindgen：
+          # 那会让 clang 用 glibc 的 bits/floatn.h 去解析 arm64 目标，直接报
+          #   error: __float128 is not supported on this target
+          # （上游 CI 在旧 runner 镜像上侥幸能过，2026-10 起镜像更新后必失败。）
+          # 正确做法：对每个目标 ABI 单独指定 NDK sysroot 头文件。
+          NDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}/ndk/${NDK_VERSION}"
+          if [ ! -d "$NDK_ROOT" ]; then
+            NDK_ROOT="$(ls -d "${ANDROID_HOME:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | tail -1)"
+          fi
+          SYSROOT="$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          echo "NDK_ROOT=$NDK_ROOT"
+          echo "SYSROOT=$SYSROOT"
+          for abi in aarch64-linux-android armv7a-linux-androideabi x86_64-linux-android i686-linux-android; do
+            key="BINDGEN_EXTRA_CLANG_ARGS_$(echo "$abi" | tr '.-' '__')"
+            echo "${key}=--sysroot=$SYSROOT -I$SYSROOT/usr/include -I$SYSROOT/usr/include/$abi" >> "$GITHUB_ENV"
+          done
+          # armv7 的 rustc target 名是 armv7-linux-androideabi（不是 armv7a-...），单独补一份
+          echo "BINDGEN_EXTRA_CLANG_ARGS_armv7_linux_androideabi=--sysroot=$SYSROOT -I$SYSROOT/usr/include -I$SYSROOT/usr/include/armv7a-linux-androideabi" >> "$GITHUB_ENV"
+          # 用 NDK 自带的 libclang，避免宿主机 libclang 版本与 NDK 头文件不匹配
+          if [ -d "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64" ]; then
+            echo "LIBCLANG_PATH=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib64" >> "$GITHUB_ENV"
+          else
+            echo "LIBCLANG_PATH=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/lib" >> "$GITHUB_ENV"
+          fi
+
+      - name: 🧰 创建 Rust 工具链配置
+        run: |
+          set -euo pipefail
+          # 显式声明需要交叉编译的 Android target，cargo-ndk/cargokit 会据此构建
           cat > rust/rust-toolchain.toml << EOF
           [toolchain]
           channel = "stable"
           targets = ["armv7-linux-androideabi", "aarch64-linux-android", "i686-linux-android", "x86_64-linux-android"]
           EOF
+          cat rust/rust-toolchain.toml
 
       - name: 🛠️ 构建 armeabi-v7a 架构 APK
         run: |
