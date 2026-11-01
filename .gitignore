@@ -60,3 +60,6 @@ third_party/npcap-sdk/
 # 本地排查 CI 失败时下载的构建日志，不属于源码
 build_log*.txt
 macos_build.log
+
+# 本地临时工作目录（分诊报告、修复说明、工具链）
+.tmp/
