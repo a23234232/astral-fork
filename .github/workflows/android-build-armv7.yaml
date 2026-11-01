@@ -14,12 +14,17 @@ jobs:
       packages: write
     
     env:
-      FLUTTER_VERSION: beta
+      # 固定版本而不是 beta：beta 是移动分支，会导致 pub 整图重解析，
+      # 拉进与 pubspec.lock 不一致的插件版本（与 macOS 构建同一类问题）。
+      FLUTTER_VERSION: 3.47.9
       FLUTTER_CHANNEL: beta
       RUST_VERSION: 1.89.0
       NDK_VERSION: 28.2.13676358
       JDK_VERSION: 17
       CMAKE_VERSION: 3.18.1
+      # 与 pubspec.lock 中记录的包源保持一致，否则 --enforce-lockfile 必然失败
+      PUB_HOSTED_URL: https://pub.flutter-io.cn
+      FLUTTER_STORAGE_BASE_URL: https://storage.flutter-io.cn
     
     steps:
       - name: 🛠️ 检出代码仓库
@@ -57,11 +62,25 @@ jobs:
           distribution: 'adopt'
 
       - name: 🤖 设置 Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          ndk-version: '28.2.13676358'
-          cmake-version: '3.18.1'
-          
+        run: |
+          set -euo pipefail
+          # 上游原本使用 android-actions/setup-android@v3，该 action 内部会安装
+          # 已从 SDK 仓库下架的旧版 "tools" 包，2026-10 起在 runner 上直接失败：
+          #   Warning: Failed to find package 'tools'  (sdkmanager exit 1)
+          # 这里改用 runner 预装的 SDK 自行安装构建所需组件。
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | tail -1)"
+          if [ -z "$SDKMGR" ]; then
+            echo "找不到 sdkmanager，回退到 which"; SDKMGR="$(which sdkmanager)"
+          fi
+          echo "使用 sdkmanager: $SDKMGR"
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-36" \
+            "build-tools;36.0.0" "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" > /dev/null
+          echo "Android SDK 组件就绪"; ls "$ANDROID_HOME"
+
       - name: 🐦 安装 Flutter
         run: |
           chmod +x $GITHUB_WORKSPACE/scripts/install_flutter.sh
@@ -69,21 +88,40 @@ jobs:
 
       - name: 📚 安装 Flutter 依赖
         run: |
-          flutter pub get
+          flutter pub get --enforce-lockfile
 
           
       - name: 🔐 设置签名配置
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
-          echo "storeFile=upload-keystore.jks" >> android/key.properties
-          echo "keyAlias=${{ secrets.KEY_ALIAS }}" >> android/key.properties
-          echo "storePassword=${{ secrets.STORE_PASSWORD }}" >> android/key.properties
-          echo "keyPassword=${{ secrets.KEY_PASSWORD }}" >> android/key.properties
-          # 调试信息（不会显示敏感内容）
+          set -euo pipefail
+          # 发版仓库用 secrets 里的正式签名；fork/PR 环境没有 secrets 时，
+          # 生成一份一次性调试签名，仅用于「能编译出 APK」的构建验证。
+          # 注意：一次性签名不能用于覆盖安装（签名不同会安装失败）。
+          if [ -n "${{ secrets.KEYSTORE_BASE64 }}" ] && [ -n "${{ secrets.KEY_ALIAS }}" ]; then
+            echo "使用仓库 secrets 中的正式签名配置"
+            echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/upload-keystore.jks
+            {
+              echo "storeFile=upload-keystore.jks"
+              echo "keyAlias=${{ secrets.KEY_ALIAS }}"
+              echo "storePassword=${{ secrets.STORE_PASSWORD }}"
+              echo "keyPassword=${{ secrets.KEY_PASSWORD }}"
+            } > android/key.properties
+          else
+            echo "未提供签名 secrets（fork/PR 环境）：生成一次性调试签名，仅用于构建验证"
+            keytool -genkeypair -v \
+              -keystore android/app/ci-verify.jks \
+              -storepass astralci -keypass astralci \
+              -alias astralci -keyalg RSA -keysize 2048 -validity 3650 \
+              -dname "CN=Astral CI Verify, OU=CI, O=Astral, L=NA, ST=NA, C=CN" > /dev/null 2>&1
+            {
+              echo "storeFile=ci-verify.jks"
+              echo "keyAlias=astralci"
+              echo "storePassword=astralci"
+              echo "keyPassword=astralci"
+            } > android/key.properties
+          fi
           echo "检查 key.properties 是否创建成功:"
           ls -la android/key.properties
-          echo "检查 keystore 是否创建成功:"
-          ls -la android/app/upload-keystore.jks
 
       - name: 🐦 设置 Flutter
         run: |
