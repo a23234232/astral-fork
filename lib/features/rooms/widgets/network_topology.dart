@@ -29,6 +29,9 @@ class _NetworkTopologyViewState extends State<NetworkTopologyView> {
   DateTime? _lastGraphSyncAt;
   DateTime? _lastMetricsSyncAt;
 
+  /// 编辑器当前可视区域尺寸；用于按容器自适应画布布局（#244）。
+  Size? _viewportSize;
+
   @override
   void initState() {
     super.initState();
@@ -96,6 +99,7 @@ class _NetworkTopologyViewState extends State<NetworkTopologyView> {
       localIp: localIp,
       existingPositions: existingPositions,
       shouldAnimateConnections: shouldAnimate,
+      viewport: _viewportSize,
     );
 
     if (_controller == null) {
@@ -132,6 +136,7 @@ class _NetworkTopologyViewState extends State<NetworkTopologyView> {
       localIp: localIp,
       existingPositions: {},
       shouldAnimateConnections: _shouldAnimateConnections,
+      viewport: _viewportSize,
     );
 
     final controller = _controller!;
@@ -162,48 +167,80 @@ class _NetworkTopologyViewState extends State<NetworkTopologyView> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    final localIp = ServiceManager().networkConfigState.ipv4.value;
-    var serverCount = 0;
-    var playerCount = 0;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // 记录编辑器可视区域，窗口/分屏尺寸变化后按新画布重排节点（#244）。
+        _updateViewport(constraints);
 
-    for (final node in widget.nodes) {
-      if (localIp.isNotEmpty && node.ipv4 == localIp) {
-        continue;
-      }
-      if (NetworkTopologyGraphSync.isServerNode(node)) {
-        serverCount++;
-      } else {
-        playerCount++;
-      }
-    }
+        final localIp = ServiceManager().networkConfigState.ipv4.value;
+        var serverCount = 0;
+        var playerCount = 0;
 
-    final denseMode = widget.nodes.length >= 12;
+        for (final node in widget.nodes) {
+          if (localIp.isNotEmpty && node.ipv4 == localIp) {
+            continue;
+          }
+          if (NetworkTopologyGraphSync.isServerNode(node)) {
+            serverCount++;
+          } else {
+            playerCount++;
+          }
+        }
 
-    return Stack(
-      children: [
-        NodeFlowEditor<TopologyNodeData, dynamic>(
-          key: const ValueKey('topology'),
-          controller: _controller!,
-          theme: _buildTheme(context),
-          nodeBuilder:
-              (context, node) => NetworkTopologyNodes.buildNode(
+        // 节点多或可视区域小（窄窗/小窗/矮屏）时改用紧凑节点卡片，
+        // 降低行距压缩后的重叠，保证所有节点都能落在可视区域内。
+        final denseMode =
+            widget.nodes.length >= 12 ||
+            (constraints.hasBoundedHeight && constraints.maxHeight < 560) ||
+            (constraints.hasBoundedWidth && constraints.maxWidth < 560);
+
+        return Stack(
+          children: [
+            NodeFlowEditor<TopologyNodeData, dynamic>(
+              key: const ValueKey('topology'),
+              controller: _controller!,
+              theme: _buildTheme(context),
+              nodeBuilder:
+                  (context, node) => NetworkTopologyNodes.buildNode(
+                    context,
+                    node,
+                    denseMode: denseMode,
+                  ),
+              behavior: NodeFlowBehavior.preview,
+            ),
+            Positioned(
+              top: 12,
+              left: 12,
+              child: NetworkTopologyNodes.buildLegendCard(
                 context,
-                node,
-                denseMode: denseMode,
+                serverCount: serverCount,
+                playerCount: playerCount,
               ),
-          behavior: NodeFlowBehavior.preview,
-        ),
-        Positioned(
-          top: 12,
-          left: 12,
-          child: NetworkTopologyNodes.buildLegendCard(
-            context,
-            serverCount: serverCount,
-            playerCount: playerCount,
-          ),
-        ),
-      ],
+            ),
+          ],
+        );
+      },
     );
+  }
+
+  /// 缓存编辑器可视区域；尺寸变化时在下一帧按新画布重排一次。
+  void _updateViewport(BoxConstraints constraints) {
+    if (!constraints.hasBoundedWidth ||
+        !constraints.hasBoundedHeight ||
+        constraints.maxWidth <= 0 ||
+        constraints.maxHeight <= 0) {
+      return;
+    }
+    final viewport = Size(constraints.maxWidth, constraints.maxHeight);
+    if (_viewportSize == viewport) return;
+    _viewportSize = viewport;
+    // 构建阶段不能直接改 controller，放到下一帧重排，避免旧坐标把
+    // 节点留在可视区域外（表现为节点「消失」，见 #244）。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _syncGraph(force: true);
+      setState(() {});
+    });
   }
 
   NodeFlowTheme _buildTheme(BuildContext context) {

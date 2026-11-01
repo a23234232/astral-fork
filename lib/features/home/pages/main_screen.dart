@@ -189,68 +189,87 @@ class _MainScreenState extends State<MainScreen>
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final isSmallWindow = SmallWindowAdapter.shouldApplyAdapter(context);
 
-    return Watch((context) {
-      final currentIndex = ServiceManager().uiState.selectedIndex.value;
-      final itemCount = navigationItems.length;
+    // 基于父级实际约束判断是否使用紧凑（小窗/窄屏）布局：窗口被系统
+    // 拉伸/缩小时 LayoutBuilder 会实时重建，不再依赖 MediaQuery 改写或
+    // 猜测窗口宽度（#246）。紧凑布局保证「顶部栏 + 内容 + 底部导航」
+    // 三者都能布局，内容页自身可滚动。
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = SmallWindowAdapter.isCompactConstraints(constraints);
 
-      if (currentIndex >= itemCount && itemCount > 0) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (ServiceManager().uiState.selectedIndex.value >= itemCount) {
-            ServiceManager().uiState.selectedIndex.value = 0;
+        return Watch((context) {
+          final currentIndex = ServiceManager().uiState.selectedIndex.value;
+          final itemCount = navigationItems.length;
+
+          if (currentIndex >= itemCount && itemCount > 0) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (ServiceManager().uiState.selectedIndex.value >= itemCount) {
+                ServiceManager().uiState.selectedIndex.value = 0;
+              }
+            });
           }
-        });
-      }
 
-      final safeIndex =
-          (currentIndex >= 0 && currentIndex < itemCount) ? currentIndex : 0;
+          final safeIndex =
+              (currentIndex >= 0 && currentIndex < itemCount)
+                  ? currentIndex
+                  : 0;
 
-      return Scaffold(
-        appBar: isSmallWindow ? null : StatusBar(),
-        body: Row(
-          children: [
-            if (ServiceManager().uiState.isDesktop.value && !isSmallWindow)
-              LeftNav(items: navigationItems, colorScheme: colorScheme),
-            Expanded(
-              child: Column(
+          return Scaffold(
+            appBar: isCompact ? null : StatusBar(),
+            body: SafeArea(
+              top: isCompact,
+              bottom: false,
+              child: Row(
                 children: [
-                  if (isSmallWindow)
-                    Container(
-                      height: 36,
-                      color: colorScheme.primaryContainer.withValues(alpha: 0.4),
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        safeIndex < navigationItems.length
-                            ? navigationItems[safeIndex].label
-                            : '',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                          color: colorScheme.onPrimaryContainer,
-                        ),
-                      ),
-                    ),
+                  if (ServiceManager().uiState.isDesktop.value && !isCompact)
+                    LeftNav(items: navigationItems, colorScheme: colorScheme),
                   Expanded(
-                    child: IndexedStack(
-                      index: safeIndex,
-                      children: _pages,
+                    child: Column(
+                      children: [
+                        if (isCompact)
+                          Container(
+                            height: 36,
+                            color: colorScheme.primaryContainer.withValues(
+                              alpha: 0.4,
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8.0,
+                            ),
+                            alignment: Alignment.centerLeft,
+                            child: Text(
+                              safeIndex < navigationItems.length
+                                  ? navigationItems[safeIndex].label
+                                  : '',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                                color: colorScheme.onPrimaryContainer,
+                              ),
+                            ),
+                          ),
+                        Expanded(
+                          child: IndexedStack(
+                            index: safeIndex,
+                            children: _pages,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
-          ],
-        ),
-        bottomNavigationBar:
-            (ServiceManager().uiState.isDesktop.value && !isSmallWindow)
-                ? null
-                : BottomNav(
-                  navigationItems: navigationItems,
-                  colorScheme: colorScheme,
-                ),
-      );
-    });
+            bottomNavigationBar:
+                (ServiceManager().uiState.isDesktop.value && !isCompact)
+                    ? null
+                    : BottomNav(
+                      navigationItems: navigationItems,
+                      colorScheme: colorScheme,
+                    ),
+          );
+        });
+      },
+    );
   }
 }

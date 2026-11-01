@@ -90,7 +90,13 @@ class UpdateDownloadUi {
               final acceleratedUrl = await downloader.resolveAcceleratedUrl(
                 downloadUrl,
               );
-              if (isCancelled()) return null;
+              // #214：onWork 现在返回 DownloadResult，取消也要给出明确的失败类型，
+              // 不能返回 null（否则与 DownloadProgressDialog 的新签名不兼容）。
+              if (isCancelled()) {
+                return const DownloadResult.failed(
+                  DownloadFailure(DownloadFailureKind.cancelled, '下载已取消'),
+                );
+              }
 
               onStatus('正在下载更新…');
               onProgress(0);

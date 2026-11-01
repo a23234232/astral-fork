@@ -106,7 +106,15 @@ class ServerConfigBuilder {
   }
 
   /// 构建服务器URL列表
-  ServerConfigBuilder withServers(dynamic room, List<ServerMod> globalServers) {
+  ///
+  /// #243：房间自带服务器时，默认**只**使用房间服务器；只有调用方显式打开
+  /// [includeGlobalServers]（用户开启「连接房间时同时使用我的全局服务器」）才追加
+  /// 全局启用服务器。房间没有自带服务器时保持旧行为（使用全局启用服务器）。
+  ServerConfigBuilder withServers(
+    dynamic room,
+    List<ServerMod> globalServers, {
+    bool includeGlobalServers = true,
+  }) {
     final enabledUrls = _expandServerUrls(
       globalServers.where((s) => s.enable),
     );
@@ -120,13 +128,18 @@ class ServerConfigBuilder {
           merged.add(url);
         }
       }
-      for (final url in enabledUrls) {
-        if (seen.add(url)) {
-          merged.add(url);
+      if (includeGlobalServers) {
+        for (final url in enabledUrls) {
+          if (seen.add(url)) {
+            merged.add(url);
+          }
         }
+        _serverUrls = merged;
+        _log('📡 使用房间服务器 + 全局服务器 (${_serverUrls.length} 个): $_serverUrls');
+      } else {
+        _serverUrls = merged;
+        _log('📡 仅使用房间服务器 (${_serverUrls.length} 个): $_serverUrls');
       }
-      _serverUrls = merged;
-      _log('📡 使用房间服务器 (${_serverUrls.length} 个): $_serverUrls');
       return this;
     }
 
@@ -137,10 +150,72 @@ class ServerConfigBuilder {
   }
 
   /// 构建监听器列表
+  ///
+  /// #254：旧实现会丢弃所有包含 `[::]` 的监听（`where((url) => !url.contains('[::]'))`），
+  /// 导致用户即使手动添加 IPv6 监听也不会生效。现在改为「保留 IPv6 监听 + 去重」。
+  ///
+  /// 设计取舍：这里不再自行补 `tcp://[::]` / `udp://[::]`。astral 默认把
+  /// `enable_ipv6=true` 传给 easytier（`net_config.dart` 默认值），而 easytier 在
+  /// 该 flag 开启时会为 `0.0.0.0` 通配监听自动补一个对应 `[::]` 监听（上游
+  /// `instance/listeners.rs` 的 `enable_ipv6` 分支）。若这里再合成一份 `[::]`，
+  /// 固定端口场景会与 easytier 自动补的监听重复 bind，可能导致监听启动失败。
+  /// 因此只做「按 scheme://host:port 去重保留」，把 IPv6 监听的决定权交给用户配置。
   ServerConfigBuilder withListeners(List<String> listeners) {
-    _listenerUrls = listeners.where((url) => !url.contains('[::]')).toList();
-    _log('👂 监听器 (${_listenerUrls.length} 个)');
+    final seen = <String>{};
+    final result = <String>[];
+    for (final raw in listeners) {
+      final url = raw.trim();
+      if (url.isEmpty) continue;
+      final key = _normalizeListenerKey(url);
+      if (seen.add(key)) {
+        result.add(url);
+      } else {
+        _log('⚠️ 忽略重复监听器: $url');
+      }
+    }
+
+    // 冲突保护：easytier 会为 `0.0.0.0:固定端口` 通配监听自动补一个同端口 `[::]`
+    // 监听；如果用户同时显式写了同 scheme+端口的 `[::]`，两个监听会 bind 同一端口，
+    // 可能让整个监听启动失败。此时丢弃显式 `[::]` 项（IPv6 仍由 easytier 自动补）。
+    // 端口为 0 时自动补的是另一个随机端口，不存在 bind 冲突，故不处理。
+    final v4FixedEndpoints = <String>{};
+    for (final url in result) {
+      final uri = Uri.tryParse(url);
+      if (uri == null ||
+          uri.host != '0.0.0.0' ||
+          !uri.hasPort ||
+          uri.port == 0) {
+        continue;
+      }
+      v4FixedEndpoints.add('${uri.scheme.toLowerCase()}:${uri.port}');
+    }
+    if (v4FixedEndpoints.isNotEmpty) {
+      result.removeWhere((url) {
+        final uri = Uri.tryParse(url);
+        if (uri == null || uri.host != '::' || !uri.hasPort || uri.port == 0) {
+          return false;
+        }
+        final endpoint = '${uri.scheme.toLowerCase()}:${uri.port}';
+        if (!v4FixedEndpoints.contains(endpoint)) return false;
+        _log('⚠️ 显式 IPv6 监听与 easytier 自动补的 [::] 同端口冲突，已忽略: $url');
+        return true;
+      });
+    }
+
+    _listenerUrls = result;
+    _log('👂 监听器 (${_listenerUrls.length} 个): $_listenerUrls');
     return this;
+  }
+
+  /// 监听器去重键：`scheme://host:port`（host 统一小写、去掉 IPv6 方括号）。
+  /// 解析失败时退回原始字符串小写，保证至少能去掉完全相同的重复项。
+  static String _normalizeListenerKey(String raw) {
+    final uri = Uri.tryParse(raw);
+    if (uri == null || uri.scheme.isEmpty || uri.host.isEmpty) {
+      return raw.toLowerCase();
+    }
+    final port = uri.hasPort ? uri.port : 0;
+    return '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}:$port';
   }
 
   /// 构建代理CIDR

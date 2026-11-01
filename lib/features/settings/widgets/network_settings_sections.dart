@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:astral/generated/locale_keys.g.dart';
+import 'package:astral/core/platform/local_prefs.dart';
 import 'package:astral/core/services/service_manager.dart';
 import 'package:astral/core/ui/app_snack_bars.dart';
 import 'package:astral/src/rust/api/hops.dart';
@@ -109,7 +110,58 @@ class NetworkBasicSettingsCard extends StatelessWidget {
             ServiceManager().networkConfig.updateDisableP2p(value);
           },
         ),
+        _divider(),
+        const _UseGlobalServersSwitchTile(),
       ],
+    );
+  }
+}
+
+/// #243：房间自带服务器时，是否同时连接用户自己的全局启用服务器。
+///
+/// 默认关闭（`LocalPrefs.defaultUseGlobalServersWithRoom`）：导入别人的分享房间时
+/// 只连接房间内置服务器，避免把自己的默认服务器混进对方的房间网络。
+/// 偏好存本地 JSON（`LocalPrefs`），不新增 Isar 字段，避免改 schema / 重新生成 *.g.dart。
+class _UseGlobalServersSwitchTile extends StatefulWidget {
+  const _UseGlobalServersSwitchTile();
+
+  @override
+  State<_UseGlobalServersSwitchTile> createState() =>
+      _UseGlobalServersSwitchTileState();
+}
+
+class _UseGlobalServersSwitchTileState
+    extends State<_UseGlobalServersSwitchTile> {
+  bool? _value;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final value = await LocalPrefs.getUseGlobalServersWithRoom();
+    if (!mounted) return;
+    setState(() => _value = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = _value ?? LocalPrefs.defaultUseGlobalServersWithRoom;
+    return SwitchListTile(
+      title: const Text('连接房间时同时使用我的全局服务器'),
+      subtitle: const Text(
+        '默认关闭：房间自带服务器时只使用房间服务器；开启后同时连接全局启用的服务器（旧版行为）',
+      ),
+      value: enabled,
+      // 读取偏好完成前禁用，避免用户把默认展示值误当成已保存状态
+      onChanged: _value == null
+          ? null
+          : (value) async {
+              setState(() => _value = value);
+              await LocalPrefs.setUseGlobalServersWithRoom(value);
+            },
     );
   }
 }

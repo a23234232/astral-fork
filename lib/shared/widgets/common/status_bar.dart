@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:astral/core/services/service_manager.dart';
-import 'package:astral/core/platform/small_window_adapter.dart';
 import 'package:astral/shared/widgets/common/status_bar_actions.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
@@ -24,28 +23,9 @@ class StatusBar extends StatelessWidget implements PreferredSizeWidget {
   Widget build(BuildContext context) {
     // 获取当前主题的配色方案
     final colorScheme = Theme.of(context).colorScheme;
-    final bool isSmallWindow = SmallWindowAdapter.shouldApplyAdapter(context);
 
-    // 在小窗口模式下使用更简洁的状态栏
-    if (isSmallWindow) {
-      return PreferredSize(
-        preferredSize: const Size.fromHeight(36),
-        child: AppBar(
-          backgroundColor: colorScheme.primaryContainer,
-          foregroundColor: colorScheme.onPrimaryContainer,
-          toolbarHeight: 32, // 在小窗口模式下降低高度
-          title: Text(
-            ServiceManager().appSettingsState.appName.value,
-            style: TextStyle(
-              fontSize: 14, // 在小窗口模式下使用更小的字体
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          actions: buildCompactStatusBarActions(context),
-        ),
-      );
-    }
-
+    // 紧凑（小窗/窄屏）布局由 MainScreen 用独立的 36 高标题栏处理，
+    // 这里不再依赖窗口宽度猜测分支（#246）；正常宽度沿用完整状态栏。
     return PreferredSize(
       // 设置状态栏高度
       preferredSize: const Size.fromHeight(36),

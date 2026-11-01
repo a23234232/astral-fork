@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:astral/core/services/update_downloader.dart';
 import 'package:astral/core/ui/app_snack_bars.dart';
 import 'package:flutter/material.dart';
 import 'package:open_file/open_file.dart';
@@ -72,10 +73,13 @@ class UpdateDialog extends StatelessWidget {
         ),
       ),
       actions: [
-        TextButton(
-          onPressed: () => Navigator.of(context).pop(),
-          child: const Text('稍后再说'),
-        ),
+        // #249：「已是最新版本」场景下不再同时给「稍后再说」和「确定」两个
+        // 行为完全相同的按钮，只保留一个「确定」；有新版本时才显示「稍后再说」。
+        if (!isLatestVersion)
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('稍后再说'),
+          ),
         if (!isLatestVersion && onNetDiskDownload != null)
           TextButton(
             onPressed: () {
@@ -125,7 +129,10 @@ class UpdateDialog extends StatelessWidget {
 /// 下载进度对话框（含准备阶段状态文案）
 class DownloadProgressDialog extends StatefulWidget {
   /// [onStatus] 更新当前步骤说明；[onProgress] 传 `null` 表示不确定进度。
-  final Future<String?> Function(
+  ///
+  /// 返回 [DownloadResult]（#214）：失败原因由下载器分类后交给本对话框展示，
+  /// 不再统一显示成「无法保存文件」。
+  final Future<DownloadResult> Function(
     void Function(String message) onStatus,
     void Function(double? progress) onProgress,
     bool Function() isCancelled,
@@ -167,7 +174,7 @@ class _DownloadProgressDialogState extends State<DownloadProgressDialog> {
 
   Future<void> _startDownload() async {
     try {
-      final filePath = await widget.onWork(
+      final result = await widget.onWork(
         (message) {
           if (mounted && !_isCancelled) {
             setState(() => _status = message);
@@ -186,9 +193,13 @@ class _DownloadProgressDialogState extends State<DownloadProgressDialog> {
       if (mounted) {
         setState(() {
           _isWorking = false;
-          _filePath = filePath;
-          if (filePath == null) {
-            _error = '下载失败：无法保存文件';
+          if (result.isSuccess) {
+            _filePath = result.filePath;
+            _error = null;
+          } else {
+            // #214：显示下载器给出的真实失败原因（超时/网络/HTTP 状态码/写盘）
+            // 以及排查提示，而不是统一的「无法保存文件」。
+            _error = result.failure?.displayMessage ?? '下载失败：未知原因';
           }
         });
       }
@@ -198,7 +209,7 @@ class _DownloadProgressDialogState extends State<DownloadProgressDialog> {
       if (mounted) {
         setState(() {
           _isWorking = false;
-          _error = '下载失败: ${e.toString()}';
+          _error = '下载失败：${e.toString()}';
         });
       }
     }

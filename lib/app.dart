@@ -1,4 +1,3 @@
-import 'package:astral/core/platform/small_window_adapter.dart';
 import 'package:astral/shared/widgets/common/home_widget_refresh_binder.dart';
 import 'package:astral/features/home/pages/main_screen.dart';
 import 'package:flutter/material.dart';
@@ -23,19 +22,12 @@ class KevinApp extends StatelessWidget {
         localizationsDelegates: context.localizationDelegates,
         supportedLocales: context.supportedLocales,
         locale: context.locale,
+        // 不再改写 MediaQuery：旧实现强制 devicePixelRatio=1.0 并改
+        // textScaler/padding/viewInsets，会破坏小窗口下的缩放与安全区
+        // 计算（#246 小窗内容异常）。小窗/紧凑布局改由各布局组件基于
+        // 实际约束（LayoutBuilder / MediaQuery.sizeOf）自行处理。
         builder: (BuildContext context, Widget? child) {
-          // 处理 MediaQuery 异常问题，特别是小米澎湃系统和安卓小窗口
-          MediaQueryData mediaQuery = MediaQuery.of(context);
-
-          // 使用小窗口适配器处理媒体查询
-          mediaQuery = SmallWindowAdapter.adaptMediaQuery(mediaQuery);
-
-          return MediaQuery(
-            data: mediaQuery,
-            child: SmallWindowAdapter.createSafeAreaAdapter(
-              child ?? const SizedBox.shrink(),
-            ),
-          );
+          return child ?? const SizedBox.shrink();
         },
         theme: ThemeData(
           useMaterial3: true,

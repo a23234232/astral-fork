@@ -51,12 +51,14 @@ class NetworkTopologyGraphSync {
     required String localIp,
     required Map<String, Offset> existingPositions,
     required bool shouldAnimateConnections,
+    Size? viewport,
   }) {
     return NetworkTopologyBuild.buildGraphModel(
       nodes,
       localIp: localIp,
       existingPositions: existingPositions,
       shouldAnimateConnections: shouldAnimateConnections,
+      viewport: viewport,
     );
   }
 

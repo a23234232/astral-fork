@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:easy_localization/easy_localization.dart';
 import 'package:astral/generated/locale_keys.g.dart';
 import 'package:astral/core/services/service_manager.dart';
@@ -18,9 +18,11 @@ class StartupPage extends BaseSettingsPage {
         buildSettingsCard(
           context: context,
           children: [
+            // #249：原先每个开关下方的「小字」与下方「启动说明」卡片的说明文案
+            // 基本重复；这里只保留开关标题，功能说明统一放在下方卡片，避免同页
+            // 出现两份同义文案。
             SwitchListTile(
               title: Text(LocaleKeys.startup_on_boot.tr()),
-              subtitle: Text(LocaleKeys.startup_on_boot_desc.tr()),
               value: ServiceManager().startupState.startup.value,
               onChanged: (value) async {
                 await ServiceManager().appSettings.setStartup(value);
@@ -28,7 +30,6 @@ class StartupPage extends BaseSettingsPage {
             ),
             SwitchListTile(
               title: Text(LocaleKeys.startup_minimize.tr()),
-              subtitle: Text(LocaleKeys.startup_minimize_desc.tr()),
               value: ServiceManager().startupState.startupMinimize.value,
               onChanged: (value) {
                 ServiceManager().appSettings.setStartupMinimize(value);
@@ -36,7 +37,6 @@ class StartupPage extends BaseSettingsPage {
             ),
             SwitchListTile(
               title: Text(LocaleKeys.startup_auto_connect.tr()),
-              subtitle: Text(LocaleKeys.startup_auto_connect_desc.tr()),
               value: ServiceManager().startupState.startupAutoConnect.value,
               onChanged: (value) {
                 ServiceManager().appSettings.setStartupAutoConnect(value);
