@@ -120,7 +120,28 @@ pub fn handle_event(mut events: EventBusSubscriber) -> tokio::task::JoinHandle<(
                             let _ = send_udp_to_localhost(&msg);
                         }
                         GlobalCtxEvent::TunDeviceError(err) => {
-                            let msg = format!("TUN 设备错误。错误: {}", err);
+                            let mut msg = format!("TUN 设备错误。错误: {}", err);
+                            // 上游 #260/#230：报告里这条错误绝大多数不是 Astral 自身的 bug，
+                            // 而是残留/冲突的虚拟网卡驱动，或者固定网卡名已被占用。
+                            // 用户拿到裸错误无从下手，这里补一段可操作的排查建议。
+                            let err_text = err.to_string().to_lowercase();
+                            if err_text.contains("adapter") || err_text.contains("tun") {
+                                if cfg!(target_os = "windows") {
+                                    msg.push_str(
+                                        " | 排查建议：1) 设备管理器→网络适配器，删除残留的 Astral/Wintun/VMware(vmnet*)/WSL 虚拟网卡后重启；\
+2) 卸载或更新第三方虚拟网卡驱动（VMware、VirtualBox、Clash TUN、加速器）；\
+3) 以管理员身份运行；4) 若用过 VMware 破解版，其网络驱动写死绝对路径会导致建卡失败，请换官方安装包或使用官方修复程序。",
+                                    );
+                                } else if cfg!(target_os = "linux") {
+                                    msg.push_str(
+                                        " | 排查建议：确认已加载 tun 模块（modprobe tun）并具备 CAP_NET_ADMIN（sudo 或 setcap cap_net_admin,cap_net_raw+ep）。",
+                                    );
+                                } else if cfg!(target_os = "macos") {
+                                    msg.push_str(
+                                        " | 排查建议：macOS 创建 utun 需要管理员权限，请确认通过提权方式启动 Astral。",
+                                    );
+                                }
+                            }
                             println!("{}", msg);
                             let _ = send_udp_to_localhost(&msg);
                         }
