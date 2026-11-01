@@ -161,6 +161,54 @@ jobs:
             -C "$STAGING" .
           mv *.rpm "$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.rpm"
 
+      # 打包产物自检：把「依赖已声明 / 桌面入口与 /usr/bin 已安装 / glibc 上限」
+      # 从「希望没问题」变成「构建失败即报警」，避免又出现 #193 那种装完起不来的包。
+      - name: ✅ 校验打包结果（依赖 / 桌面入口 / glibc 上限）
+        run: |
+          set -euo pipefail
+          DEB="$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.deb"
+          RPMF="$GITHUB_WORKSPACE/release/${RELEASE_PREFIX}.rpm"
+
+          echo "== deb 依赖 =="
+          dpkg-deb -f "$DEB" Depends
+          dpkg-deb -f "$DEB" Depends | grep -q 'libayatana-appindicator3-1' \
+            || { echo "❌ deb 缺少 libayatana-appindicator3-1 依赖（#193）"; exit 1; }
+          dpkg-deb -f "$DEB" Depends | grep -q 'libgtk-3-0' \
+            || { echo "❌ deb 缺少 libgtk-3-0 依赖"; exit 1; }
+
+          echo "== deb 载荷（桌面入口 / 包装脚本 / 图标）=="
+          dpkg-deb -c "$DEB" | grep -E 'usr/(bin/astral|share/applications/astral\.desktop|share/pixmaps/astral\.png)' \
+            || { echo "❌ deb 缺少 /usr/bin/astral 或桌面入口（#250）"; exit 1; }
+          dpkg-deb -c "$DEB" | grep -q './opt/astral/astral' \
+            || { echo "❌ deb 缺少 /opt/astral/astral"; exit 1; }
+
+          echo "== rpm 依赖 =="
+          sudo apt-get install -y rpm > /dev/null 2>&1 || true
+          rpm -qpR "$RPMF" || true
+          rpm -qpR "$RPMF" | grep -q 'libayatana-appindicator3.so.1' \
+            || { echo "❌ rpm 缺少 libayatana-appindicator3 soname 依赖（#193）"; exit 1; }
+          rpm -qlp "$RPMF" | grep -q '/usr/bin/astral' \
+            || { echo "❌ rpm 缺少 /usr/bin/astral（#250）"; exit 1; }
+
+          # x64 包固定用 ubuntu-22.04 构建（glibc 2.35），避免旧发行版起不来（#194）。
+          # arm64 runner 只有 24.04（glibc 2.39），不做该断言。
+          if [[ "${RELEASE_PREFIX}" == *x64* ]]; then
+            # 用 -print -quit 让 find 自己停，避免 `find | head` 在 pipefail 下
+            # 因 SIGPIPE 误判失败（这类竞态在 macOS 构建里已经踩过一次）。
+            RUST_LIB="$(find "$GITHUB_WORKSPACE/build/linux/pkgroot/opt/astral" -name 'librust_lib_astral.so' -print -quit)"
+            if [ -n "$RUST_LIB" ]; then
+              MAX_GLIBC="$(objdump -T "$RUST_LIB" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)"
+              echo "librust_lib_astral.so 需要的最高 GLIBC 版本: $MAX_GLIBC"
+              if [ "$(printf '%s\n2.35\n' "$MAX_GLIBC" | sort -V | tail -1)" != "2.35" ]; then
+                echo "❌ 产物需要 GLIBC_$MAX_GLIBC > 2.35，Ubuntu 22.04/Debian 12 无法运行（#194）"
+                exit 1
+              fi
+            else
+              echo "⚠️ 未找到 librust_lib_astral.so，跳过 glibc 上限断言"
+            fi
+          fi
+          echo "✅ 打包产物自检通过"
+
       - name: 📤 上传 Linux 构建产物 (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
