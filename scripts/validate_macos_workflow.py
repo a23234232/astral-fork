@@ -245,6 +245,85 @@ else:
 if "rust/target" not in raw:
     fail("workflow does not cache rust/target")
 
+# macOS 14 images ship Xcode 15.4, which cannot compile the Swift that current
+# Flutter plugins generate (error: unexpected ',' separator), and the image is
+# past deprecation. Require macOS 15+ plus an explicit runtime Xcode>=16 check.
+m_runner = re.search(r"^\s{4}runs-on:\s*(\S+)", raw, re.M)
+runner = m_runner.group(1) if m_runner else ""
+if not runner.startswith("macos-"):
+    fail(f"unexpected runner {runner!r}; need a macOS image")
+else:
+    m_img = re.search(r"macos-(\d+)", runner)
+    img_ver = int(m_img.group(1)) if m_img else 0
+    print(f"  ok: runner = {runner}")
+    if img_ver < 15:
+        fail(
+            f"runner {runner} ships Xcode < 16, which cannot compile current "
+            "Flutter plugin Swift (unexpected ',' separator); use macos-15+"
+        )
+if "$MAJOR" not in raw or "-lt 16" not in raw:
+    fail("no runtime assertion that the runner's Xcode is >= 16")
+else:
+    print("  ok: Xcode >= 16 asserted at runtime")
+
+# The Flutter default must be a pinned version: 'beta' is a moving branch that
+# re-resolved the whole dependency graph and pulled Xcode-16-only plugins.
+m_flutter = re.search(r"flutter_version:.*?\n(?:\s+.*\n)*?\s+default:\s*'([^']*)'", raw)
+flutter_default = m_flutter.group(1) if m_flutter else ""
+print(f"  ok: default Flutter = {flutter_default or '<none>'}")
+if flutter_default in ("beta", "stable", "master", ""):
+    fail(
+        f"default Flutter {flutter_default!r} is a moving channel; pin a version "
+        "so builds cannot silently change their dependency graph"
+    )
+else:
+    print("  ok: Flutter version is pinned")
+
+# Caches must invalidate when the native toolchain or Flutter version changes.
+for needle, what in (
+    ("env.XCODE_VERSION", "Xcode version"),
+    ("env.FLUTTER_VERSION", "Flutter version"),
+):
+    if needle not in raw:
+        fail(f"cache key does not include {what}; stale native artifacts would be reused")
+    else:
+        print(f"  ok: cache key includes {what}")
+
+# The committed lockfile records a specific pub host. If the workflow does not
+# set PUB_HOSTED_URL to the same host, pub treats every locked entry as coming
+# from a different source and re-resolves the whole graph (observed in CI as
+# "Changed 167 dependencies!", which silently upgraded plugins and broke the
+# build). The two must agree.
+lock_urls = set(
+    re.findall(r'url:\s*"(https://[^"]+)"', (REPO / "pubspec.lock").read_bytes().decode("utf-8"))
+)
+lock_urls = {u for u in lock_urls if "pub" in u}
+if not lock_urls:
+    fail("pubspec.lock has no hosted URLs; cannot verify pub source")
+else:
+    lock_host = sorted(lock_urls)[0]
+    print(f"  ok: lock pub host = {lock_host}")
+    m_pub = re.search(r"PUB_HOSTED_URL:\s*(\S+)", raw)
+    if not m_pub:
+        fail(
+            "workflow does not set PUB_HOSTED_URL; CI would fetch from pub.dev while "
+            f"the lock records {lock_host}, causing a silent full re-resolution"
+        )
+    elif m_pub.group(1).rstrip("/") != lock_host.rstrip("/"):
+        fail(
+            f"PUB_HOSTED_URL ({m_pub.group(1)}) does not match the lock's host "
+            f"({lock_host}); pub would re-resolve everything"
+        )
+    else:
+        print("  ok: PUB_HOSTED_URL matches the lockfile host")
+
+# Silent re-resolution is what turned a green build red after 27 days; require
+# the explicit guard so drift fails loudly at the pub step instead.
+if "--enforce-lockfile" not in raw:
+    fail("flutter pub get does not use --enforce-lockfile; lock drift would be silent")
+else:
+    print("  ok: pub get enforces the lockfile")
+
 # Persistent fallback: actions/cache is evicted by GitHub after 7 days without
 # access; Release assets are not. The snapshot must only be downloaded when the
 # cache genuinely missed, otherwise every build pays ~800MB of transfer.
