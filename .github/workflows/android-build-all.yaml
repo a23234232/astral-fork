@@ -2,6 +2,12 @@ name: 📱 构建 Android-build-all
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '把构建出的 APK 上传到该 Release 标签（留空则仅上传 Actions artifact）'
+        required: false
+        default: ''
+        type: string
   push:  # 每次 push 到仓库时触发
     tags:
       - 'v*'  # 指定触发分支
@@ -168,3 +174,14 @@ jobs:
         with:
           name: astral-universal-apk
           path: build/app/outputs/flutter-apk/app-release.apk
+
+      # 由 runner 直接把 APK 挂到 Release：避免在本地/弱网环境下下载 30MB+ 的
+      # artifact 再上传（实际踩过 gh run download 长时间卡住的情况）。
+      - name: 🚀 上传 APK 到 Release（可选）
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.release_tag }}" \
+            "build/app/outputs/flutter-apk/app-release.apk#astral-universal.apk" --clobber
