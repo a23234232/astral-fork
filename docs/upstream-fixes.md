@@ -85,7 +85,7 @@
 | Linux x64（ubuntu-22.04） | ✅ 构建通过；自检步骤确认 deb `Depends: libayatana-appindicator3-1, libgtk-3-0`、rpm `REQUIRENAME: libayatana-appindicator3.so.1()(64bit)`、载荷含 `/usr/bin/astral` + `astral.desktop` + pixmap、`librust_lib_astral.so` 最高 GLIBC ≤ 2.35 |
 | Linux arm64（ubuntu-24.04-arm） | ✅ 构建通过；同一套自检通过（soname 为 `()(aarch64)`） |
 | Windows x64 | ✅ `windows-build.yml`（zip）与 `windows-build-Setup.yml`（Inno Setup 安装包）均构建通过 |
-| Android（arm64-v8a / armeabi-v7a / x86_64 / universal） | ✅ arm64-v8a 已构建通过（Kotlin 前台服务 + Dart 改动 + Rust 交叉编译全部通过）；其余 ABI 走同一流水线 |
+| Android（arm64-v8a / armeabi-v7a / x86_64 / universal） | ✅ 四个 ABI 全部构建通过（Kotlin 前台服务 + Dart 改动 + Rust 交叉编译），产物已挂到 Release |
 | macOS arm64 | ✅ 构建通过，产出 ad-hoc 签名 DMG |
 | 真机行为（#246 小窗、#244 拓扑、#263 通知清理、#250 提权） | ⚠️ **仍需真机回归**：CI 只能验证编译/打包，行为正确性需在对应设备上复测 |
 
