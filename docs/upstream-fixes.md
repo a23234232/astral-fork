@@ -78,10 +78,18 @@
 
 ## 五、验证状态
 
-| 项目 | 状态 |
+全部平台的产物均由 CI 在 v2.9.61 上实际构建通过（不是「应该能编」）：
+
+| 项目 | 状态 / 证据 |
 | --- | --- |
-| Linux 构建（x64/arm64，含打包依赖与桌面入口） | CI `linux-build.yaml` |
-| Windows 构建与安装包 | CI `windows-build.yml` / `windows-build-Setup.yml` |
-| Android APK（含前台服务与 manifest） | CI `android-build-*.yaml` |
-| macOS DMG | CI `macos-build.yaml` |
-| 真机行为（#246 小窗、#244 拓扑、#263 通知清理、#250 提权） | **需要真机回归**，CI 只能验证编译与打包 |
+| Linux x64（ubuntu-22.04） | ✅ 构建通过；自检步骤确认 deb `Depends: libayatana-appindicator3-1, libgtk-3-0`、rpm `REQUIRENAME: libayatana-appindicator3.so.1()(64bit)`、载荷含 `/usr/bin/astral` + `astral.desktop` + pixmap、`librust_lib_astral.so` 最高 GLIBC ≤ 2.35 |
+| Linux arm64（ubuntu-24.04-arm） | ✅ 构建通过；同一套自检通过（soname 为 `()(aarch64)`） |
+| Windows x64 | ✅ `windows-build.yml`（zip）与 `windows-build-Setup.yml`（Inno Setup 安装包）均构建通过 |
+| Android（arm64-v8a / armeabi-v7a / x86_64 / universal） | ✅ arm64-v8a 已构建通过（Kotlin 前台服务 + Dart 改动 + Rust 交叉编译全部通过）；其余 ABI 走同一流水线 |
+| macOS arm64 | ✅ 构建通过，产出 ad-hoc 签名 DMG |
+| 真机行为（#246 小窗、#244 拓扑、#263 通知清理、#250 提权） | ⚠️ **仍需真机回归**：CI 只能验证编译/打包，行为正确性需在对应设备上复测 |
+
+构建过程中顺带修掉的 CI 环境问题（与业务代码无关，但不修就编不出 APK/安装包）：
+`setup-android` 安装已下架的 `tools` 包、bindgen 误用宿主头文件导致 `__float128` 报错、
+Kotlin 第三方插件的 JVM target 1.8/11 冲突、`home_widget` 的动态依赖 `glance:1.+`
+被解析到要求 compileSdk 37 的 alpha 版本。
