@@ -29,7 +29,11 @@ val resolvedApplicationId =
 
 android {
     namespace = "com.kevin.astral"
-    compileSdk = flutter.compileSdkVersion
+    // 固定 compileSdk = 37：home_widget 0.9.0 会带进
+    // androidx.glance:glance-appwidget:1.3.0-alpha02，它要求使用方 compileSdk >= 37，
+    // 否则 :app:checkReleaseAarMetadata 直接失败。
+    // 之前用 flutter.compileSdkVersion（Flutter 3.47.9 = 36）会正好卡在这个检查上。
+    compileSdk = 37
     // ndkVersion = flutter.ndkVersion
     ndkVersion = "28.2.13676358"
 
