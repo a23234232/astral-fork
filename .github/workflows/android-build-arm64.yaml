@@ -75,7 +75,7 @@ jobs:
           fi
           echo "使用 sdkmanager: $SDKMGR"
           yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
-          "$SDKMGR" --install "platform-tools" "platforms;android-36" "platforms;android-37" \
+          "$SDKMGR" --install "platform-tools" "platforms;android-36" \
             "build-tools;36.0.0" "ndk;${NDK_VERSION}" "cmake;${CMAKE_VERSION}" > /dev/null
           echo "Android SDK 组件就绪"; ls "$ANDROID_HOME"
       - name: 🐦 安装 Flutter
