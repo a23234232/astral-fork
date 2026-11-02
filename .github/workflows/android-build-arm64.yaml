@@ -182,5 +182,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          gh release upload "${{ inputs.release_tag }}" \
-            "build/app/outputs/flutter-apk/app-release.apk#astral-arm64-v8a.apk" --clobber
+          cp build/app/outputs/flutter-apk/app-release.apk "/tmp/astral-arm64-v8a.apk"
+          ls -l "/tmp/astral-arm64-v8a.apk"
+          gh release upload "${{ inputs.release_tag }}" "/tmp/astral-arm64-v8a.apk" --clobber
